@@ -118,14 +118,11 @@ class TransactionManager : public NonCopyable {
    * The callback used to determine which elements to remove
    * during a flush.
    */
-  using FlushCallback = StartCallback;
-
-  /**
-   * The base wait time for a retry. This is used during the transaction retry
-   * process.
-   */
-  static constexpr chre::Nanoseconds kDefaultRetryWaitTime =
-      chre::Nanoseconds(chre::Seconds(1));
+  using FlushCallback = typename std::conditional<
+      std::is_pointer<TransactionData>::value ||
+          std::is_fundamental<TransactionData>::value,
+      bool (*)(TransactionData data, void *callbackData),
+      bool (*)(const TransactionData &data, void *callbackData)>::type;
 
   /**
    * The maximum number of retries for a transaction.
@@ -153,15 +150,18 @@ class TransactionManager : public NonCopyable {
   TransactionManager(StartCallback startCallback,
                      CompleteCallback completeCallback,
                      DeferCallback deferCallback,
-                     DeferCancelCallback deferCancelCallback)
+                     DeferCancelCallback deferCancelCallback,
+                     Nanoseconds retryWaitTime)
       : mStartCallback(startCallback),
         mCompleteCallback(completeCallback),
         mDeferCallback(deferCallback),
-        mDeferCancelCallback(deferCancelCallback) {
+        mDeferCancelCallback(deferCancelCallback),
+        mRetryWaitTime(retryWaitTime) {
     CHRE_ASSERT(startCallback != nullptr);
     CHRE_ASSERT(completeCallback != nullptr);
     CHRE_ASSERT(deferCallback != nullptr);
     CHRE_ASSERT(deferCancelCallback != nullptr);
+    CHRE_ASSERT(retryWaitTime.toRawNanoseconds() > 0);
   }
 
   ~TransactionManager() {
@@ -206,9 +206,10 @@ class TransactionManager : public NonCopyable {
    *
    * @param flushCallback The function that determines which transactions will
    * be flushed (upon return true).
+   * @param data The data to be passed to the flush callback.
    * @return The number of flushed transactions.
    */
-  uint32_t flushTransactions(FlushCallback *flushCallback);
+  size_t flushTransactions(FlushCallback flushCallback, void *data);
 
   /**
    * Starts a transaction. This function will mark the transaction as ready to
@@ -233,21 +234,7 @@ class TransactionManager : public NonCopyable {
    * @return The retry wait time.
    */
   Nanoseconds getRetryWaitTime() {
-    LockGuard lock(mMutex);
     return mRetryWaitTime;
-  }
-
-  /**
-   * Sets the retry time for the retry functionality. This is the amount of time
-   * between retries for a transaction.
-   *
-   * This function is safe to call in any thread.
-   *
-   * @param waitTime The retry wait time.
-   */
-  void setRetryWaitTime(Nanoseconds waitTime) {
-    LockGuard lock(mMutex);
-    mRetryWaitTime = waitTime;
   }
 
   /**
@@ -305,7 +292,7 @@ class TransactionManager : public NonCopyable {
   uint32_t mNextTransactionId = 0;
 
   //! The retry wait time.
-  Nanoseconds mRetryWaitTime = kDefaultRetryWaitTime;
+  Nanoseconds mRetryWaitTime;
 
   //! The timer handle for the timer tracking execution of processTransactions.
   uint32_t mTimerHandle = CHRE_TIMER_INVALID;

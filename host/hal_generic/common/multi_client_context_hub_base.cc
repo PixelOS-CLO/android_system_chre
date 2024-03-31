@@ -50,6 +50,12 @@ constexpr std::chrono::duration ktestModeTimeOut = std::chrono::seconds(5);
 // The transaction id for synchronously load/unload a nanoapp in test mode.
 constexpr int32_t kTestModeTransactionId{static_cast<int32_t>(0x80000000)};
 
+// Allow build-time override.
+#ifndef CHRE_NANOAPP_IMAGE_HEADER_SIZE
+#define CHRE_NANOAPP_IMAGE_HEADER_SIZE (0x1000)
+#endif
+constexpr size_t kNanoappImageHeaderSize = CHRE_NANOAPP_IMAGE_HEADER_SIZE;
+
 bool isValidContextHubId(uint32_t hubId) {
   if (hubId != kDefaultHubId) {
     LOGE("Invalid context hub ID %" PRId32, hubId);
@@ -156,7 +162,7 @@ MultiClientContextHubBase::MultiClientContextHubBase() {
                                       deathRecipient.get(),
                                       deathRecipientCookie) == STATUS_OK;
       };
-  mLogger.init();
+  mLogger.init(kNanoappImageHeaderSize);
 }
 
 ScopedAStatus MultiClientContextHubBase::getContextHubs(
@@ -203,18 +209,14 @@ ScopedAStatus MultiClientContextHubBase::loadNanoapp(
   }
   auto clientId = mHalClientManager->getClientId(pid);
   auto request = mHalClientManager->getNextFragmentedLoadRequest();
-
   if (request.has_value() &&
       sendFragmentedLoadRequest(clientId, request.value())) {
-    mEventLogger.logNanoappLoad(appBinary, /* success= */ true);
     return ScopedAStatus::ok();
   }
+
   LOGE("Failed to send the first load request for nanoapp 0x%" PRIx64,
        appBinary.nanoappId);
   mHalClientManager->resetPendingLoadTransaction();
-  // TODO(b/284481035): The result should be logged after the async response is
-  //  received.
-  mEventLogger.logNanoappLoad(appBinary, /* success= */ false);
   return fromResult(false);
 }
 
@@ -236,8 +238,8 @@ ScopedAStatus MultiClientContextHubBase::unloadNanoapp(int32_t contextHubId,
   }
   pid_t pid = AIBinder_getCallingPid();
   if (transactionId != kTestModeTransactionId &&
-      !mHalClientManager->registerPendingUnloadTransaction(pid,
-                                                           transactionId)) {
+      !mHalClientManager->registerPendingUnloadTransaction(pid, transactionId,
+                                                           appId)) {
     return fromResult(false);
   }
   LOGI("Unloading nanoapp 0x%" PRIx64, appId);
@@ -252,9 +254,6 @@ ScopedAStatus MultiClientContextHubBase::unloadNanoapp(int32_t contextHubId,
   if (!result) {
     mHalClientManager->resetPendingUnloadTransaction(clientId, transactionId);
   }
-  // TODO(b/284481035): The result should be logged after the async response is
-  //  received.
-  mEventLogger.logNanoappUnload(appId, result);
   return fromResult(result);
 }
 
@@ -533,7 +532,9 @@ bool MultiClientContextHubBase::enableTestMode() {
        mTestModeNanoapps->size());
   for (auto iter = mTestModeNanoapps->begin();
        iter != mTestModeNanoapps->end();) {
-    uint64_t appId = *iter;
+    auto appId = static_cast<int64_t>(*iter);
+
+    // Send a request to unload a nanoapp.
     if (!unloadNanoapp(kDefaultHubId, appId, kTestModeTransactionId).isOk()) {
       LOGW("Failed to request to unload nanoapp 0x%" PRIx64
            " to enable test mode",
@@ -541,20 +542,25 @@ bool MultiClientContextHubBase::enableTestMode() {
       iter = mTestModeNanoapps->erase(iter);
       continue;
     }
+
+    // Wait for the unloading result.
     mTestModeSyncUnloadResult.reset();
     mEnableTestModeCv.wait_for(lock, ktestModeTimeOut, [&]() {
       return mTestModeSyncUnloadResult.has_value();
     });
-    if (!*mTestModeSyncUnloadResult) {
+    bool success =
+        mTestModeSyncUnloadResult.has_value() && *mTestModeSyncUnloadResult;
+    if (success) {
+      iter++;
+    } else {
       LOGW("Failed to unload nanoapp 0x%" PRIx64 " to enable test mode", appId);
       iter = mTestModeNanoapps->erase(iter);
-      continue;
     }
-    iter++;
+    mEventLogger.logNanoappUnload(appId, success);
   }
+
   LOGI("%" PRIu64 " nanoapps are unloaded to enable test mode",
        mTestModeNanoapps->size());
-
   mIsTestModeEnabled = true;
   mTestModeNanoapps.emplace();
   return true;
@@ -637,8 +643,10 @@ void MultiClientContextHubBase::handleMessageFromChre(
       break;
     }
     case fbs::ChreMessage::NanoappTokenDatabaseInfo: {
-      // TODO(b/242760291): Map nanoapp log detokenizers to instance IDs in the
-      //  log message parser.
+      const auto *info = message.AsNanoappTokenDatabaseInfo();
+      mLogger.addNanoappDetokenizer(info->app_id, info->instance_id,
+                                    info->database_offset_bytes,
+                                    info->database_size_bytes);
       break;
     }
     default:
@@ -748,14 +756,18 @@ void MultiClientContextHubBase::onNanoappLoadResponse(
     mPreloadedNanoappLoader->onLoadNanoappResponse(response, clientId);
     return;
   }
-  if (!mHalClientManager->isPendingLoadTransactionExpected(
-          clientId, response.transaction_id, response.fragment_id)) {
-    LOGW("Received a response for client %" PRIu16 " transaction %" PRIu32
-         " fragment %" PRIu32
-         " that doesn't match the existing transaction. Skipped.",
+
+  std::optional<HalClientManager::PendingLoadNanoappInfo> nanoappInfo =
+      mHalClientManager->getNanoappInfoFromPendingLoadTransaction(
+          clientId, response.transaction_id, response.fragment_id);
+
+  if (!nanoappInfo.has_value()) {
+    LOGW("Client %" PRIu16 " transaction %" PRIu32 " fragment %" PRIu32
+         " doesn't have a pending load transaction. Skipped",
          clientId, response.transaction_id, response.fragment_id);
     return;
   }
+
   if (response.success) {
     auto nextFragmentedRequest =
         mHalClientManager->getNextFragmentedLoadRequest();
@@ -776,6 +788,10 @@ void MultiClientContextHubBase::onNanoappLoadResponse(
          clientId, response.transaction_id, response.fragment_id);
     mHalClientManager->resetPendingLoadTransaction();
   }
+
+  mEventLogger.logNanoappLoad(nanoappInfo->appId, nanoappInfo->appSize,
+                              nanoappInfo->appVersion, response.success);
+
   // At this moment the current pending transaction should either have no more
   // fragment to send or the response indicates its last nanoapp fragment fails
   // to get loaded.
@@ -794,14 +810,20 @@ void MultiClientContextHubBase::onNanoappUnloadResponse(
     mEnableTestModeCv.notify_all();
     return;
   }
-  if (mHalClientManager->resetPendingUnloadTransaction(
-          clientId, response.transaction_id)) {
+
+  std::optional<int64_t> nanoappId =
+      mHalClientManager->resetPendingUnloadTransaction(clientId,
+                                                       response.transaction_id);
+  if (nanoappId.has_value()) {
+    mEventLogger.logNanoappUnload(*nanoappId, response.success);
     if (auto callback = mHalClientManager->getCallback(clientId);
         callback != nullptr) {
       callback->handleTransactionResult(response.transaction_id,
                                         /* in_success= */ response.success);
     }
   }
+  // TODO(b/242760291): Remove the nanoapp log detokenizer associated with this
+  // nanoapp.
 }
 
 void MultiClientContextHubBase::onNanoappMessage(
