@@ -78,7 +78,7 @@ class TransactionManager : public NonCopyable {
       typename std::conditional<std::is_pointer<TransactionData>::value ||
                                     std::is_fundamental<TransactionData>::value,
                                 bool (*)(TransactionData data),
-                                bool (*)(const TransactionData &data)>::type;
+                                bool (*)(TransactionData &data)>::type;
 
   /**
    * The type of function used to defer a callback. See DeferCallback.
@@ -125,11 +125,6 @@ class TransactionManager : public NonCopyable {
       bool (*)(const TransactionData &data, void *callbackData)>::type;
 
   /**
-   * The maximum number of retries for a transaction.
-   */
-  static constexpr uint16_t kMaxNumRetries = 3;
-
-  /**
    * The function called when the transaction processing timer is fired.
    * @see DeferCallbackFunction() for parameter information.
    */
@@ -141,8 +136,11 @@ class TransactionManager : public NonCopyable {
       return;
     }
 
-    transactionManagerPtr->deferProcessTransactions(data,
-                                                    /* timerFired= */ true);
+    {
+      LockGuard lock(transactionManagerPtr->mMutex);
+      transactionManagerPtr->mTimerHandle = CHRE_TIMER_INVALID;
+    }
+    transactionManagerPtr->deferProcessTransactions(data);
   }
 
   TransactionManager() = delete;
@@ -151,12 +149,13 @@ class TransactionManager : public NonCopyable {
                      CompleteCallback completeCallback,
                      DeferCallback deferCallback,
                      DeferCancelCallback deferCancelCallback,
-                     Nanoseconds retryWaitTime)
+                     Nanoseconds retryWaitTime, uint16_t maxNumRetries = 3)
       : mStartCallback(startCallback),
         mCompleteCallback(completeCallback),
         mDeferCallback(deferCallback),
         mDeferCancelCallback(deferCancelCallback),
-        mRetryWaitTime(retryWaitTime) {
+        mRetryWaitTime(retryWaitTime),
+        mMaxNumRetries(maxNumRetries) {
     CHRE_ASSERT(startCallback != nullptr);
     CHRE_ASSERT(completeCallback != nullptr);
     CHRE_ASSERT(deferCallback != nullptr);
@@ -241,9 +240,8 @@ class TransactionManager : public NonCopyable {
    * Defers processing transactions in the event loop thread.
    *
    * @param data The pointer to the TransactionManager.
-   * @param timerFired If the timer fired.
    */
-  void deferProcessTransactions(void *data, bool timerFired);
+  void deferProcessTransactions(void *data);
 
  private:
   //! Size of a single block for the transaction queue.
@@ -268,10 +266,8 @@ class TransactionManager : public NonCopyable {
    * need to be retried next. This function is called in the event loop thread
    * and will defer a call to itself at the next time needed to processes the
    * next transaction.
-   *
-   * @param timerFired If the timer fired.
    */
-  void processTransactions(bool timerFired);
+  void processTransactions();
 
   //! The start callback.
   StartCallback mStartCallback;
@@ -293,6 +289,9 @@ class TransactionManager : public NonCopyable {
 
   //! The retry wait time.
   Nanoseconds mRetryWaitTime;
+
+  //! The maximum number of retries for a transaction.
+  uint16_t mMaxNumRetries;
 
   //! The timer handle for the timer tracking execution of processTransactions.
   uint32_t mTimerHandle = CHRE_TIMER_INVALID;

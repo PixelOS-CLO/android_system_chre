@@ -47,7 +47,7 @@ bool TransactionManager<TransactionData>::completeTransaction(
       } else {
         transaction.errorCode = errorCode;
       }
-      deferProcessTransactions(this, /* timerFired= */ false);
+      deferProcessTransactions(/* data= */ this);
       return true;
     }
   }
@@ -65,15 +65,16 @@ size_t TransactionManager<TransactionData>::flushTransactions(
 
   LockGuard lock(mMutex);
 
-  deferProcessTransactions(this, /* timerFired= */ false);
+  deferProcessTransactions(/* data= */ this);
   return mTransactions.removeMatchedFromBack(
-      [](Transaction &transaction, void *data, void *extraData) {
-        FlushCallback callback = reinterpret_cast<FlushCallback>(data);
-        if (callback == nullptr) {
+      [](Transaction &transaction, void *innerData, void *extraData) {
+        FlushCallback innerCallback =
+            reinterpret_cast<FlushCallback>(innerData);
+        if (innerCallback == nullptr) {
           return false;
         }
 
-        return callback(transaction.data, extraData);
+        return innerCallback(transaction.data, extraData);
       },
       reinterpret_cast<void *>(callback), data, mTransactions.size());
 }
@@ -112,25 +113,26 @@ bool TransactionManager<TransactionData>::startTransaction(
 
   mTransactions.push_back(transaction);
 
-  deferProcessTransactions(this, /* timerFired= */ false);
+  deferProcessTransactions(/* data= */ this);
   return true;
 }
 
 template <typename TransactionData>
 void TransactionManager<TransactionData>::deferProcessTransactions(
-    void *data, bool timerFired) {
+    void *data) {
   bool status = mDeferCallback(
-      [](uint16_t /* type */, void *data, void *extraData) {
-        auto transactionManagerPtr = static_cast<TransactionManager *>(data);
+      [](uint16_t /* type */, void *innerData, void * /* extraData */) {
+        auto transactionManagerPtr =
+            static_cast<TransactionManager *>(innerData);
         if (transactionManagerPtr == nullptr) {
           LOGE("Could not get transaction manager to process transactions");
           return;
         }
 
-        NestedDataPtr<bool> timerFiredFromExtraData(extraData);
-        transactionManagerPtr->processTransactions(timerFiredFromExtraData);
+        transactionManagerPtr->processTransactions();
       },
-      data, NestedDataPtr<bool>(timerFired),
+      data,
+      /* extraData= */ nullptr,
       /* delay= */ Nanoseconds(0),
       /* outTimerHandle= */ nullptr);
 
@@ -140,13 +142,13 @@ void TransactionManager<TransactionData>::deferProcessTransactions(
 }
 
 template <typename TransactionData>
-void TransactionManager<TransactionData>::processTransactions(bool timerFired) {
+void TransactionManager<TransactionData>::processTransactions() {
   LockGuard lock(mMutex);
 
-  if (!timerFired && mTimerHandle != CHRE_TIMER_INVALID) {
-    mDeferCancelCallback(mTimerHandle);
+  if (mTimerHandle != CHRE_TIMER_INVALID) {
+    CHRE_ASSERT(mDeferCancelCallback(mTimerHandle));
+    mTimerHandle = CHRE_TIMER_INVALID;
   }
-  mTimerHandle = CHRE_TIMER_INVALID;
 
   if (mTransactions.size() == 0) {
     return;
@@ -158,11 +160,12 @@ void TransactionManager<TransactionData>::processTransactions(bool timerFired) {
     Transaction &transaction = mTransactions[i];
     if (transaction.timeoutTime <= now ||
         (transaction.nextRetryTime <= now &&
-         transaction.numCompletedStartCalls >= kMaxNumRetries + 1) ||
+         transaction.numCompletedStartCalls >= mMaxNumRetries + 1) ||
         transaction.errorCode.has_value()) {
-      uint8_t errorCode = transaction.errorCode.has_value()
-                              ? *transaction.errorCode
-                              : CHRE_ERROR_TIMEOUT;
+      uint8_t errorCode = CHRE_ERROR_TIMEOUT;
+      if (transaction.errorCode.has_value()) {
+        errorCode = *transaction.errorCode;
+      }
 
       bool status = mCompleteCallback(transaction.data, errorCode);
       if (status) {
@@ -195,8 +198,9 @@ void TransactionManager<TransactionData>::processTransactions(bool timerFired) {
 
   Nanoseconds waitTime = nextExecutionTime - SystemTime::getMonotonicTime();
   if (waitTime.toRawNanoseconds() > 0) {
-    mDeferCallback(TransactionManager<TransactionData>::onTimerFired, this,
-                   /* extraData= */ nullptr, waitTime, &mTimerHandle);
+    mDeferCallback(TransactionManager<TransactionData>::onTimerFired,
+                   /* data= */ this, /* extraData= */ nullptr,
+                   waitTime, &mTimerHandle);
     CHRE_ASSERT(mTimerHandle != CHRE_TIMER_INVALID);
   }
 }

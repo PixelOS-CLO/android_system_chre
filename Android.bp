@@ -742,6 +742,9 @@ cc_defaults {
 // Lib dependencies for apps and libs using PW_RPC with nanopb.
 cc_defaults {
     name: "pw_rpc_nanopb_lib_dependencies",
+    defaults: [
+        "pw_android_common_backends",
+    ],
     static_libs: [
         "pw_containers",
         "pw_protobuf",
@@ -756,6 +759,7 @@ cc_defaults {
 cc_library_static {
     name: "pw_rpc_chre",
     defaults: [
+        "pw_android_common_backends",
         "pw_rpc_cflags_chre",
         "pw_rpc_defaults",
     ],
@@ -987,6 +991,8 @@ cc_defaults {
         "-DCHRE_TEST_WIFI_RANGING_RESULT_TIMEOUT_NS=300000000",
         "-DCHRE_TEST_ASYNC_RESULT_TIMEOUT_NS=300000000",
         "-DCHRE_BLE_READ_RSSI_SUPPORT_ENABLED",
+        "-DCHRE_RELIABLE_MESSAGE_SUPPORT_ENABLED",
+        "-DCHRE_LARGE_PAYLOAD_MAX_SIZE=32000",
         "-Wextra-semi",
     ],
 }
@@ -1062,16 +1068,14 @@ cc_binary {
     ],
     static_libs: [
         "pw_detokenizer",
+        "pw_polyfill",
+        "pw_span",
         "pw_varint",
     ],
     shared_libs: [
         "libhidlbase",
         "libpower",
         "android.hardware.soundtrigger@2.0",
-    ],
-    header_libs: [
-        "pw_span_headers",
-        "pw_polyfill_headers",
     ],
     init_rc: ["host/exynos/chre_daemon_exynos.rc"],
 }
