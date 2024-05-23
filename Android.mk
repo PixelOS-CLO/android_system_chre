@@ -98,11 +98,11 @@ LOCAL_SHARED_LIBRARIES := \
     pixelatoms-cpp \
     android.frameworks.stats-V2-ndk \
     libbinder_ndk \
-    chre_metrics_reporter \
     server_configurable_flags
 
 LOCAL_STATIC_LIBRARIES := \
-    chre_flags_c_lib
+    chre_flags_c_lib \
+    chre_metrics_reporter
 
 LOCAL_SRC_FILES += $(MSM_SRC_FILES)
 LOCAL_C_INCLUDES += $(MSM_INCLUDES)
