@@ -14,9 +14,6 @@
  * limitations under the License.
  */
 
-// TODO(b/298459533): metrics_reporter_in_the_daemon ramp up -> remove old
-// code
-
 #include <cstdlib>
 #include <fstream>
 
@@ -47,7 +44,6 @@ using ::aidl::android::frameworks::stats::IStats;
 using ::aidl::android::frameworks::stats::VendorAtom;
 using ::aidl::android::frameworks::stats::VendorAtomValue;
 using ::android::chre::Atoms::ChreHalNanoappLoadFailed;
-using ::android::chre::flags::metrics_reporter_in_the_daemon;
 #endif  // CHRE_DAEMON_METRIC_ENABLED
 
 bool FbsDaemonBase::sendNanoappLoad(uint64_t appId, uint32_t appVersion,
@@ -183,27 +179,11 @@ void FbsDaemonBase::handleDaemonMessage(const uint8_t *message) {
              mPreloadedNanoappPendingTransactions.front().transactionId);
 
 #ifdef CHRE_DAEMON_METRIC_ENABLED
-        if (metrics_reporter_in_the_daemon()) {
-          if (!mMetricsReporter.logNanoappLoadFailed(
-                  mPreloadedNanoappPendingTransactions.front().nanoappId,
-                  ChreHalNanoappLoadFailed::TYPE_PRELOADED,
-                  ChreHalNanoappLoadFailed::REASON_ERROR_GENERIC)) {
-            LOGE("Could not log the nanoapp load failed metric");
-          }
-        } else {
-          std::vector<VendorAtomValue> values(3);
-          values[0].set<VendorAtomValue::longValue>(
-              mPreloadedNanoappPendingTransactions.front().nanoappId);
-          values[1].set<VendorAtomValue::intValue>(
-              PixelAtoms::ChreHalNanoappLoadFailed::TYPE_PRELOADED);
-          values[2].set<VendorAtomValue::intValue>(
-              PixelAtoms::ChreHalNanoappLoadFailed::REASON_ERROR_GENERIC);
-          const VendorAtom atom{
-              .reverseDomainName = PixelAtoms::ReverseDomainNames().pixel(),
-              .atomId = PixelAtoms::Atom::kChreHalNanoappLoadFailed,
-              .values{std::move(values)},
-          };
-          reportMetric(atom);
+        if (!mMetricsReporter.logNanoappLoadFailed(
+                mPreloadedNanoappPendingTransactions.front().nanoappId,
+                ChreHalNanoappLoadFailed::TYPE_PRELOADED,
+                ChreHalNanoappLoadFailed::REASON_ERROR_GENERIC)) {
+          LOGE("Could not log the nanoapp load failed metric");
         }
 #endif  // CHRE_DAEMON_METRIC_ENABLED
       }
