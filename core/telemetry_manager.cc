@@ -87,18 +87,12 @@ void sendPalOpenFailedMetric(
                    &result);
 }
 
-void sendEventLoopStats(uint32_t maxQueueSize, uint32_t meanQueueSize,
-                        uint32_t numDroppedEvents) {
-  _android_hardware_google_pixel_PixelAtoms_ChreEventQueueSnapshotReported
-      result = PIXELATOMS_GET(ChreEventQueueSnapshotReported_init_default);
   result.has_snapshot_chre_get_time_ms = true;
   result.snapshot_chre_get_time_ms =
       SystemTime::getMonotonicTime().toRawNanoseconds() /
       kOneMillisecondInNanoseconds;
   result.has_max_event_queue_size = true;
   result.max_event_queue_size = maxQueueSize;
-  result.has_mean_event_queue_size = true;
-  result.mean_event_queue_size = meanQueueSize;
   result.has_num_dropped_events = true;
   result.num_dropped_events = numDroppedEvents;
 
@@ -156,7 +150,6 @@ void TelemetryManager::onPalOpenFailure(PalType type) {
 void TelemetryManager::collectSystemMetrics() {
   EventLoop &eventLoop = EventLoopManagerSingleton::get()->getEventLoop();
   sendEventLoopStats(eventLoop.getMaxEventQueueSize(),
-                     eventLoop.getMeanEventQueueSize(),
                      eventLoop.getNumEventsDropped());
 
   scheduleMetricTimer();
