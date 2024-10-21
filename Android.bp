@@ -732,6 +732,8 @@ cc_test_host {
     static_libs: [
         "chre_linux",
         "libgmock",
+        "pw_allocator",
+        "pw_containers",
     ],
     sanitize: {
         address: true,
@@ -977,6 +979,7 @@ cc_library_static {
     static_libs: [
         "libgmock",
         "libgtest",
+        "pw_allocator",
         "pw_rpc_chre",
     ],
     host_supported: true,
