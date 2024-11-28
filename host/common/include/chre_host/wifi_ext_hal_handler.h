@@ -51,8 +51,6 @@ class WifiExtHalHandler {
 
   ~WifiExtHalHandler();
 
-  ~WifiExtHalHandler();
-
   /**
    * Construct a new Wifi Ext Hal Handler object, initiate a connection to
    * the Wifi ext HAL service.

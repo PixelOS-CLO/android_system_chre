@@ -26,10 +26,8 @@
 
 #ifdef CHRE_DAEMON_METRIC_ENABLED
 #include <android_chre_flags.h>
+#include <chre_atoms_log.h>
 #include <system/chre/core/chre_metrics.pb.h>
-#include <hardware/google/pixel/pixelstats/pixelatoms.pb.h>
-
-namespace PixelAtoms = ::android::hardware::google::pixel::PixelAtoms;
 #endif  // CHRE_DAEMON_METRIC_ENABLED
 
 // Aliased for consistency with the way these symbols are referenced in
@@ -162,8 +160,8 @@ void ChreDaemonBase::handleMetricLog(const ::chre::fbs::MetricLogT *metricMsg) {
   const std::vector<int8_t> &encodedMetric = metricMsg->encoded_metric;
 
   switch (metricMsg->id) {
-    case PixelAtoms::Atom::kChrePalOpenFailed: {
-      PixelAtoms::ChrePalOpenFailed metric;
+    case CHRE_PAL_OPEN_FAILED: {
+      metrics::ChrePalOpenFailed metric;
       if (!metric.ParseFromArray(encodedMetric.data(), encodedMetric.size())) {
         LOGE("Failed to parse metric data");
       } else {
@@ -177,8 +175,8 @@ void ChreDaemonBase::handleMetricLog(const ::chre::fbs::MetricLogT *metricMsg) {
       }
       break;
     }
-    case PixelAtoms::Atom::kChreEventQueueSnapshotReported: {
-      PixelAtoms::ChreEventQueueSnapshotReported metric;
+    case CHRE_EVENT_QUEUE_SNAPSHOT_REPORTED: {
+      metrics::ChreEventQueueSnapshotReported metric;
       if (!metric.ParseFromArray(encodedMetric.data(), encodedMetric.size())) {
         LOGE("Failed to parse metric data");
       } else if (!mMetricsReporter.logEventQueueSnapshotReported(

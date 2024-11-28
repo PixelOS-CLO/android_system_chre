@@ -26,10 +26,8 @@
 #ifdef CHRE_DAEMON_METRIC_ENABLED
 #include <aidl/android/frameworks/stats/IStats.h>
 #include <android/binder_manager.h>
+#include <android_chre_flags.h>
 #include <chre_atoms_log.h>
-#include <hardware/google/pixel/pixelstats/pixelatoms.pb.h>
-
-namespace PixelAtoms = ::android::hardware::google::pixel::PixelAtoms;
 #endif  // CHRE_DAEMON_METRIC_ENABLED
 
 // Aliased for consistency with the way these symbols are referenced in

@@ -237,4 +237,3 @@ message ChreApWakeUpOccurred {
   // suspend/wake-up.
   optional int64 nanoapp_id = 2;
 }
-
