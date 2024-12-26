@@ -115,6 +115,7 @@ pw_add_library(chre.util.nanoapp STATIC
     chre.chre_api
     chre.platform.assert
     chre.platform.log
+    chre.platform.tagged_log
     chre.util
     chre.variant.config
     pw_tokenizer
