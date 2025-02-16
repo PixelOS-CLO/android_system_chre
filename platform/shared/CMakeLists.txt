@@ -322,6 +322,7 @@ pw_add_library(chre.platform.shared.host_protocol_chre STATIC
     chre.platform.shared.host_protocol_common
     chre.util
     chre.util.flatbuffers
+    chre.util.system
     chre.chre_api
     chre_third_party.flatbuffers
   SOURCES
@@ -460,6 +461,7 @@ pw_add_facade(chre.platform.shared.nanoapp_loader STATIC
     chre.platform.assert
     chre.platform.fatal_error
     chre.platform.shared.chre_api_re
+    chre.platform.shared.chre_api_msg
     chre.platform.shared.dlfcn
     chre.platform.shared.memory
     chre.platform.shared.nanoapp_tokenized_log

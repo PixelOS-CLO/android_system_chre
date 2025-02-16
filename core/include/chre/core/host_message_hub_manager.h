@@ -26,18 +26,23 @@
 #include "chre/util/non_copyable.h"
 #include "chre/util/system/message_common.h"
 #include "chre/util/system/message_router.h"
+
+#include "pw_allocator/allocator.h"
 #include "pw_allocator/unique_ptr.h"
 #include "pw_containers/intrusive_list.h"
 #include "pw_containers/vector.h"
 #include "pw_function/function.h"
 #include "pw_span/span.h"
 
-#ifndef CHRE_MESSAGE_ROUTER_MAX_HOST_HUBS
-#define CHRE_MESSAGE_ROUTER_MAX_HOST_HUBS 1
-#endif  // CHRE_MESSAGE_ROUTER_MAX_HOST_HUBS
+#if !defined(CHRE_MESSAGE_ROUTER_MAX_HOST_HUBS)
+#error "Must define maximum host message hubs for platform"
+#elif defined(CHRE_MESSAGE_ROUTER_MAX_MESSAGE_HUBS) && \
+    CHRE_MESSAGE_ROUTER_MAX_HOST_HUBS >= CHRE_MESSAGE_ROUTER_MAX_MESSAGE_HUBS
+#error "Message hub limit must be greater than host message hub limit"
+#endif  // !defined(CHRE_MESSAGE_ROUTER_MAX_HOST_HUBS)
 
 #ifndef CHRE_MESSAGE_ROUTER_MAX_HOST_ENDPOINTS
-#define CHRE_MESSAGE_ROUTER_MAX_HOST_ENDPOINTS 8
+#error "Must define maximum host endpoints for platform"
 #endif  // CHRE_MESSAGE_ROUTER_MAX_HOST_ENDPOINTS
 
 namespace chre {
@@ -53,23 +58,23 @@ class HostMessageHubManager : public NonCopyable {
    public:
     virtual ~HostCallback() = default;
 
-    /** Processes the details of a given endpoint. */
-    using ProcessEndpointFn = pw::Function<void(const message::MessageHubInfo &,
-                                                const message::EndpointInfo &)>;
-
     /**
-     * Allows the callee to examine MessageRouter state.
+     * Notifies the HAL that the host message hub proxies have been reset.
      *
      * Invoked within MessageHubManager::reset().
-     *
-     * This is done using the functor rather than by directly passing lists of
-     * hubs and endpoints to avoid the requisite allocations and copies.
-     *
-     * @param forEachEndpoint Functor which iterates over all embedded
-     * endpoints, applying the given ProcessEndpointFn to each.
      */
-    virtual void onReset(const pw::Callback<void(const ProcessEndpointFn &)>
-                             &forEachEndpoint) = 0;
+    virtual void onReset() = 0;
+
+    /**
+     * Notifies the HAL of a new embedded message hub.
+     */
+    virtual void onHubRegistered(const message::MessageHubInfo &hub) = 0;
+
+    /**
+     * Notifies the HAL of a new embedded endpoint.
+     */
+    virtual void onEndpointRegistered(
+        message::MessageHubId hub, const message::EndpointInfo &endpoint) = 0;
 
     /**
      * Sends a message within a session.
@@ -134,18 +139,13 @@ class HostMessageHubManager : public NonCopyable {
   void onHostTransportReady(HostCallback &cb);
 
   /**
-   * Resets state with the given snapshot from the host.
+   * Resets host message hub state.
    *
-   * Any existing message hubs are cleared (see Hub::clear() below) and the new
-   * message hubs are registered after the endpoints are populated.
-   *
-   * @param hubs The list of host message hubs
-   * @param endpoints The list of host endpoints
+   * Existing message hubs are cleared (see Hub::clear() below) though they
+   * remain registered with MessageRouter. When the same hub is registered again
+   * the same slot is re-activated.
    */
-  void reset(
-      pw::span<const message::MessageHubInfo> hubs,
-      pw::span<std::pair<message::MessageHubId, const message::EndpointInfo>>
-          endpoints);
+  void reset();
 
   /**
    * Registers a new host message hub
@@ -164,9 +164,11 @@ class HostMessageHubManager : public NonCopyable {
   /**
    * Registers a host endpoint
    *
+   * @param hubId Id of the owning message hub
    * @param info Details of the endpoint
    */
-  void registerEndpoint(const message::EndpointInfo &info);
+  void registerEndpoint(message::MessageHubId hubId,
+                        const message::EndpointInfo &info);
 
   /**
    * Unregisters a host endpoint
@@ -184,11 +186,12 @@ class HostMessageHubManager : public NonCopyable {
    * @param destinationHubId Id of the destination hub
    * @param destinationEndpointId Id of the destination endpoint
    * @param sessionId Id of the new session
+   * @param serviceDescriptor The protocol for the session (maybe nullptr)
    */
   void openSession(message::MessageHubId hubId, message::EndpointId endpointId,
                    message::MessageHubId destinationHubId,
                    message::EndpointId destinationEndpointId,
-                   message::SessionId sessionId);
+                   message::SessionId sessionId, const char *serviceDescriptor);
 
   /**
    * Notifies that a new session has been accepted
@@ -218,7 +221,7 @@ class HostMessageHubManager : public NonCopyable {
    * @param permissions Message permissions
    */
   void sendMessage(message::MessageHubId hubId, message::SessionId sessionId,
-                   pw::UniquePtr<std::byte[]> &&data, uint32_t type,
+                   pw::span<const std::byte> data, uint32_t type,
                    uint32_t permissions);
 
  private:
@@ -228,12 +231,16 @@ class HostMessageHubManager : public NonCopyable {
    */
   struct Endpoint : public pw::IntrusiveList<Endpoint>::Item {
     message::EndpointInfo kInfo;
+    explicit Endpoint(const message::EndpointInfo &info) : kInfo(info) {}
   };
 
   /**
    * Represents a host message hub. Registered with MessageRouter and stores the
    * returned MessageRouter::MessageHub. Stores the list of registered endpoints
    * for inspection by MessageRouter.
+   *
+   * The public APIs are expected to be called as a result of some host-side
+   * operation with HostMessageHubManager::mHubsLock held.
    */
   class Hub : public NonCopyable,
               public message::MessageRouter::MessageHubCallback {
@@ -242,12 +249,17 @@ class HostMessageHubManager : public NonCopyable {
      * Either reactivates the hub matching info or creates and registers it.
      *
      * @param info Details of the host message hub
-     * @param endpoints The list of endpoints to initialize the hub with
+     * @param endpoints The list of endpoints to initialize the hub with.
+     * Endpoints must have been allocated using mEndpointAllocator.
      * @return true on successful registration or reactivation
      */
-    static bool restoreOrCreate(const message::MessageHubInfo &info,
-                                pw::IntrusiveList<Endpoint> &endpoints);
+    static bool restoreOrCreateLocked(const message::MessageHubInfo &info,
+                                      pw::IntrusiveList<Endpoint> &endpoints);
 
+    /** NOTE: Use restoreOrCreateLocked() */
+    Hub(const char *name, pw::IntrusiveList<Endpoint> &endpoints);
+    Hub(Hub &&) = delete;
+    Hub &operator=(Hub &&) = delete;
     virtual ~Hub();
 
     /**
@@ -274,9 +286,6 @@ class HostMessageHubManager : public NonCopyable {
    private:
     static constexpr size_t kNameMaxLen = 50;
 
-    Hub(message::MessageHubId id, const char *name,
-        pw::IntrusiveList<Endpoint> &endpoints);
-
     // Implementation of MessageRouter::MessageHubCallback;
     bool onMessageReceived(pw::UniquePtr<std::byte[]> &&data,
                            uint32_t messageType, uint32_t messagePermissions,
@@ -290,20 +299,46 @@ class HostMessageHubManager : public NonCopyable {
                              &function) override;
     std::optional<message::EndpointInfo> getEndpointInfo(
         message::EndpointId endpointId) override;
+    std::optional<message::EndpointId> getEndpointForService(
+        const char *serviceDescriptor) override;
+    bool doesEndpointHaveService(message::EndpointId endpointId,
+                                 const char *serviceDescriptor) override;
+    void onEndpointRegistered(message::MessageHubId messageHubId,
+                              message::EndpointId endpointId) override;
+    void onEndpointUnregistered(message::MessageHubId messageHubId,
+                                message::EndpointId endpointId) override;
 
-    const char kName[kNameMaxLen + 1];
-    message::MessageHubId id;
+    char kName[kNameMaxLen + 1];
+
     message::MessageRouter::MessageHub mMessageHub;
     AtomicBool mActive = false;
 
     // Guards mEndpoints. Must be the innermost lock.
-    Mutex mEndointsLock;
+    Mutex mEndpointsLock;
     pw::IntrusiveList<Endpoint> mEndpoints;
   };
 
+  /**
+   * Trivial allocator wrapping the CHRE memory allocation platform APIs. It
+   * spits out pw::UniquePtr<std::byte> instances which can be passed to
+   * MessageRouter APIs.
+   */
+  // TODO(b/395649065): Move this into util
+  class ChreAllocator : public pw::Allocator {
+   public:
+    void *DoAllocate(Layout layout) override;
+    void DoDeallocate(void *ptr) override;
+  };
+
+  // Consumes and deallocates all entries in the list.
+  static void deallocateEndpoints(pw::IntrusiveList<Endpoint> &endpoints);
+
   HostCallback *mCb;
+  ChreAllocator mMsgAllocator;
 
   // Endpoint storage and allocator.
+  // NOTE: This is only accessed on host-triggered invocations which take
+  // mHubsLock, so additional synchronization is not required.
   MemoryPool<Endpoint, CHRE_MESSAGE_ROUTER_MAX_HOST_ENDPOINTS>
       mEndpointAllocator;
 
@@ -313,6 +348,10 @@ class HostMessageHubManager : public NonCopyable {
   // interface.
   Mutex mHubsLock;
   pw::Vector<Hub, CHRE_MESSAGE_ROUTER_MAX_HOST_HUBS> mHubs;
+
+  // Serializes embedded hub and endpoint state changes being sent to the host
+  // with the operations in reset().
+  Mutex mEmbeddedHubOpLock;
 };
 
 }  // namespace chre

@@ -61,6 +61,15 @@ class ChreMessageHubManager
                        message::EndpointId endpointId,
                        chreMsgEndpointInfo &info);
 
+  //! Configures ready events for the given endpoint or service.
+  //! @return true if the ready events were configured successfully, false
+  //! otherwise.
+  bool configureReadyEvents(uint16_t nanoappInstanceId,
+                            message::EndpointId fromEndpointId,
+                            message::MessageHubId hubId,
+                            message::EndpointId endpointId,
+                            const char *serviceDescriptor, bool enable);
+
   //! Gets session information for the given session ID.
   //! @return whether the session information was successfully populated.
   bool getSessionInfo(message::EndpointId fromEndpointId,
@@ -85,6 +94,12 @@ class ChreMessageHubManager
                                message::MessageHubId toHubId,
                                message::EndpointId toEndpointId,
                                const char *serviceDescriptor);
+
+  //! Closes the session and verifies the fromEndpointId is a member of the
+  //! session.
+  //! @return true if the session was closed successfully, false otherwise
+  bool closeSession(message::EndpointId fromEndpointId,
+                    message::SessionId sessionId);
 
   //! Sends a reliable message on the given session. If this function fails,
   //! the free callback will be called and it will return false.
@@ -135,6 +150,14 @@ class ChreMessageHubManager
     chreMsgServiceInfo serviceInfo;
   };
 
+  //! Data that represents a ready event configured for an endpoint or service
+  struct EndpointReadyEventData {
+    message::EndpointId fromEndpointId;
+    message::MessageHubId messageHubId;
+    message::EndpointId endpointId;
+    const char *serviceDescriptor;
+  };
+
   constexpr static size_t kMaxFreeCallbackRecords = 25;
 
   //! Callback to process message sent to a nanoapp - used by the event loop
@@ -161,6 +184,11 @@ class ChreMessageHubManager
   void onSessionStateChanged(const message::Session &session,
                              std::optional<message::Reason> reason);
 
+  //! Processes an endpoint ready event from MessageRouter. Can only be called
+  //! from the event loop thread.
+  void onEndpointReadyEvent(message::MessageHubId messageHubId,
+                            message::EndpointId endpointId);
+
   //! @return The free callback record from the callback allocator.
   std::optional<message::MessageRouterCallbackAllocator<
       MessageFreeCallbackData>::FreeCallbackRecord>
@@ -181,6 +209,22 @@ class ChreMessageHubManager
                               const chreMsgServiceInfo *serviceInfos,
                               size_t numServices);
 
+  //! Searches for an endpoint with the given hub ID, endpoint ID, and service
+  //! descriptor. The hubId can be MESSAGE_HUB_ID_ANY to search for the
+  //! endpoint on any hub, the endpointId can be ENDPOINT_ID_ANY to search for
+  //! the endpoint on any hub, or the service descriptor can be non-nullptr to
+  //! search for any endpoint that has the service.
+  //! @return the endpoint if found, std::nullopt otherwise.
+  std::optional<message::Endpoint> searchForEndpoint(
+      message::MessageHubId messageHubId, message::EndpointId endpointId,
+      const char *serviceDescriptor);
+
+  //! Removes the ready event request for the given endpoint or service.
+  void disableReadyEvents(message::EndpointId fromEndpointId,
+                          message::MessageHubId hubId,
+                          message::EndpointId endpointId,
+                          const char *serviceDescriptor);
+
   //! Definitions for MessageHubCallback
   //! @see MessageRouter::MessageHubCallback
   bool onMessageReceived(pw::UniquePtr<std::byte[]> &&data,
@@ -199,6 +243,10 @@ class ChreMessageHubManager
       const char *serviceDescriptor) override;
   bool doesEndpointHaveService(message::EndpointId endpointId,
                                const char *serviceDescriptor) override;
+  void onEndpointRegistered(message::MessageHubId messageHubId,
+                            message::EndpointId endpointId) override;
+  void onEndpointUnregistered(message::MessageHubId messageHubId,
+                              message::EndpointId endpointId) override;
 
   //! The MessageHub for the CHRE
   message::MessageRouter::MessageHub mChreMessageHub;
@@ -214,11 +262,14 @@ class ChreMessageHubManager
   //! from a nanoapp with a free callback
   message::MessageRouterCallbackAllocator<MessageFreeCallbackData> mAllocator;
 
-  //! mutex to protect mNanoappPublishedServices
+  //! Mutex to protect mNanoappPublishedServices
   Mutex mNanoappPublishedServicesMutex;
 
   //! The vector of services published by nanoapps
   DynamicVector<NanoappServiceData> mNanoappPublishedServices;
+
+  //! The vector of ready event requests
+  DynamicVector<EndpointReadyEventData> mEndpointReadyEventRequests;
 };
 
 }  // namespace chre

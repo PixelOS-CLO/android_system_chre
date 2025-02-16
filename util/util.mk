@@ -22,11 +22,13 @@ COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_bytes/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_containers/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_function/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_log/public
+COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_numeric/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_polyfill/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_preprocessor/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_result/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_span/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_status/public
+COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_toolchain/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/third_party/fuchsia/repo/sdk/lib/fit/include
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/third_party/fuchsia/repo/sdk/lib/stdcompat/include
 
