@@ -14,15 +14,15 @@
  * limitations under the License.
  */
 
+#include "chre/util/system/message_router.h"
+#include "chre/util/dynamic_vector.h"
+#include "chre/util/lock_guard.h"
+#include "chre/util/system/message_common.h"
+
 #include <inttypes.h>
 #include <cstring>
 #include <optional>
 #include <utility>
-
-#include "chre/util/dynamic_vector.h"
-#include "chre/util/lock_guard.h"
-#include "chre/util/system/message_common.h"
-#include "chre/util/system/message_router.h"
 
 namespace chre::message {
 
@@ -45,6 +45,10 @@ MessageRouter::MessageHub &MessageRouter::MessageHub::operator=(
   other.mRouter = nullptr;
   other.mHubId = MESSAGE_HUB_ID_INVALID;
   return *this;
+}
+
+MessageRouter::MessageHub::~MessageHub() {
+  unregister();
 }
 
 void MessageRouter::MessageHub::onSessionOpenComplete(SessionId sessionId) {
@@ -78,10 +82,11 @@ std::optional<Session> MessageRouter::MessageHub::getSessionWithId(
 bool MessageRouter::MessageHub::sendMessage(pw::UniquePtr<std::byte[]> &&data,
                                             uint32_t messageType,
                                             uint32_t messagePermissions,
-                                            SessionId sessionId) {
+                                            SessionId sessionId,
+                                            EndpointId fromEndpointId) {
   return mRouter != nullptr &&
          mRouter->sendMessage(std::move(data), messageType, messagePermissions,
-                              sessionId, mHubId);
+                              sessionId, fromEndpointId, mHubId);
 }
 
 bool MessageRouter::MessageHub::registerEndpoint(EndpointId endpointId) {
@@ -94,6 +99,17 @@ bool MessageRouter::MessageHub::unregisterEndpoint(EndpointId endpointId) {
 
 MessageHubId MessageRouter::MessageHub::getId() {
   return mHubId;
+}
+
+bool MessageRouter::MessageHub::isRegistered() {
+  return mRouter != nullptr;
+}
+
+void MessageRouter::MessageHub::unregister() {
+  if (mRouter != nullptr) {
+    mRouter->unregisterMessageHub(mHubId);
+  }
+  mRouter = nullptr;
 }
 
 std::optional<typename MessageRouter::MessageHub>
@@ -142,16 +158,20 @@ bool MessageRouter::forEachEndpointOfHub(
   return true;
 }
 
-void MessageRouter::forEachEndpoint(
+bool MessageRouter::forEachEndpoint(
     const pw::Function<void(const MessageHubInfo &, const EndpointInfo &)>
         &function) {
-  LockGuard<Mutex> lock(mMutex);
+  std::optional<DynamicVector<MessageHubRecord>> messageHubRecords =
+      getMessageHubRecords();
+  if (!messageHubRecords.has_value()) {
+    return false;
+  }
 
   struct Context {
     decltype(function) function;
-    MessageHubInfo &messageHubInfo;
+    const MessageHubInfo &messageHubInfo;
   };
-  for (MessageHubRecord &messageHubRecord : mMessageHubs) {
+  for (const MessageHubRecord &messageHubRecord : *messageHubRecords) {
     Context context = {
         .function = function,
         .messageHubInfo = messageHubRecord.info,
@@ -163,6 +183,7 @@ void MessageRouter::forEachEndpoint(
           return false;
         });
   }
+  return true;
 }
 
 std::optional<EndpointInfo> MessageRouter::getEndpointInfo(
@@ -186,8 +207,13 @@ std::optional<Endpoint> MessageRouter::getEndpointForService(
     return std::nullopt;
   }
 
-  LockGuard<Mutex> lock(mMutex);
-  for (MessageHubRecord &messageHubRecord : mMessageHubs) {
+  std::optional<DynamicVector<MessageHubRecord>> messageHubRecords =
+      getMessageHubRecords();
+  if (!messageHubRecords.has_value()) {
+    return std::nullopt;
+  }
+
+  for (const MessageHubRecord &messageHubRecord : *messageHubRecords) {
     if ((messageHubId == MESSAGE_HUB_ID_ANY ||
          messageHubId == messageHubRecord.info.id) &&
         messageHubRecord.callback != nullptr) {
@@ -226,12 +252,18 @@ bool MessageRouter::doesEndpointHaveService(MessageHubId messageHubId,
   return callback->doesEndpointHaveService(endpointId, serviceDescriptor);
 }
 
-void MessageRouter::forEachMessageHub(
+bool MessageRouter::forEachMessageHub(
     const pw::Function<bool(const MessageHubInfo &)> &function) {
-  LockGuard<Mutex> lock(mMutex);
-  for (MessageHubRecord &messageHubRecord : mMessageHubs) {
+  std::optional<DynamicVector<MessageHubRecord>> messageHubRecords =
+      getMessageHubRecords();
+  if (!messageHubRecords.has_value()) {
+    return false;
+  }
+
+  for (const MessageHubRecord &messageHubRecord : *messageHubRecords) {
     function(messageHubRecord.info);
   }
+  return true;
 }
 
 bool MessageRouter::unregisterMessageHub(MessageHubId fromMessageHubId) {
@@ -272,7 +304,7 @@ bool MessageRouter::unregisterMessageHub(MessageHubId fromMessageHubId) {
 
   for (auto [callback, session] : sessionsToDestroy) {
     if (callback != nullptr) {
-      callback->onSessionClosed(session, Reason::UNSPECIFIED);
+      callback->onSessionClosed(session, Reason::HUB_RESET);
     }
   }
   return true;
@@ -293,13 +325,6 @@ SessionId MessageRouter::openSession(MessageHubId fromMessageHubId,
     LOGE("Failed to open session: session ID %" PRIu16
          " is not in the reserved range",
          sessionId);
-    return SESSION_ID_INVALID;
-  }
-
-  if (fromMessageHubId == toMessageHubId) {
-    LOGE(
-        "Failed to open session: initiator and peer message hubs are the "
-        "same");
     return SESSION_ID_INVALID;
   }
 
@@ -444,10 +469,11 @@ std::optional<Session> MessageRouter::getSessionWithId(
 bool MessageRouter::sendMessage(pw::UniquePtr<std::byte[]> &&data,
                                 uint32_t messageType,
                                 uint32_t messagePermissions,
-                                SessionId sessionId,
+                                SessionId sessionId, EndpointId fromEndpointId,
                                 MessageHubId fromMessageHubId) {
   MessageRouter::MessageHubCallback *receiverCallback = nullptr;
   Session session;
+  bool sentBySessionInitiator;
   {
     LockGuard<Mutex> lock(mMutex);
 
@@ -466,17 +492,37 @@ bool MessageRouter::sendMessage(pw::UniquePtr<std::byte[]> &&data,
       return false;
     }
 
+    Endpoint sender(fromMessageHubId, fromEndpointId);
+    if (fromEndpointId == ENDPOINT_ID_ANY) {
+      if (session.initiator.messageHubId == session.peer.messageHubId) {
+        LOGE("Unable to infer sender endpoint ID: session with ID %" PRIu16
+             " is between endpoints on the same message hub with ID %" PRIu64,
+             sessionId, fromMessageHubId);
+        return false;
+      }
+      sender.endpointId = session.initiator.messageHubId == fromMessageHubId
+                              ? session.initiator.endpointId
+                              : session.peer.endpointId;
+    }
+
+    if (sender != session.initiator && sender != session.peer) {
+      LOGE("Failed to send message: session with ID %" PRIu16
+           " does not contain endpoint with hub ID %" PRIu64
+           " and endpoint ID %" PRIu64,
+           sessionId, fromMessageHubId, fromEndpointId);
+      return false;
+    }
+    sentBySessionInitiator = sender == session.initiator;
     receiverCallback = getCallbackFromMessageHubIdLocked(
-        session.initiator.messageHubId == fromMessageHubId
-            ? session.peer.messageHubId
-            : session.initiator.messageHubId);
+        sentBySessionInitiator ? session.peer.messageHubId
+                               : session.initiator.messageHubId);
   }
 
   bool success = false;
   if (receiverCallback != nullptr) {
-    success = receiverCallback->onMessageReceived(
-        std::move(data), messageType, messagePermissions, session,
-        session.initiator.messageHubId == fromMessageHubId);
+    success = receiverCallback->onMessageReceived(std::move(data), messageType,
+                                                  messagePermissions, session,
+                                                  sentBySessionInitiator);
   }
 
   if (!success) {
@@ -499,9 +545,8 @@ bool MessageRouter::unregisterEndpoint(MessageHubId messageHubId,
 
 bool MessageRouter::onEndpointRegistrationStateChanged(
     MessageHubId messageHubId, EndpointId endpointId, bool isRegistered) {
-  LockGuard<Mutex> lock(mMutex);
   MessageRouter::MessageHubCallback *callback =
-      getCallbackFromMessageHubIdLocked(messageHubId);
+      getCallbackFromMessageHubId(messageHubId);
   if (callback == nullptr) {
     LOGE("Failed to register endpoint with ID %" PRIu64
          " to message hub with ID %" PRIu64 ": hub not found",
@@ -509,7 +554,13 @@ bool MessageRouter::onEndpointRegistrationStateChanged(
     return false;
   }
 
-  for (const MessageHubRecord &messageHubRecord : mMessageHubs) {
+  std::optional<DynamicVector<MessageHubRecord>> messageHubRecords =
+      getMessageHubRecords();
+  if (!messageHubRecords.has_value()) {
+    return false;
+  }
+
+  for (const MessageHubRecord &messageHubRecord : *messageHubRecords) {
     if (messageHubRecord.info.id == messageHubId) {
       continue;
     }
@@ -521,7 +572,24 @@ bool MessageRouter::onEndpointRegistrationStateChanged(
                                                         endpointId);
     }
   }
+
   return true;
+}
+
+std::optional<DynamicVector<MessageRouter::MessageHubRecord>>
+MessageRouter::getMessageHubRecords() {
+  LockGuard<Mutex> lock(mMutex);
+  DynamicVector<MessageHubRecord> messageHubRecords;
+  if (!messageHubRecords.reserve(mMessageHubs.size())) {
+    LOG_OOM();
+    return std::nullopt;
+  }
+
+  for (const MessageHubRecord &messageHubRecord : mMessageHubs) {
+    // Will not fail because we reserved space above
+    messageHubRecords.push_back(messageHubRecord);
+  }
+  return messageHubRecords;
 }
 
 const MessageRouter::MessageHubRecord *MessageRouter::getMessageHubRecordLocked(

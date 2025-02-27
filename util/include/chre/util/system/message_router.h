@@ -18,12 +18,14 @@
 #define CHRE_UTIL_SYSTEM_MESSAGE_ROUTER_H_
 
 #include "chre/platform/mutex.h"
+#include "chre/util/dynamic_vector.h"
 #include "chre/util/singleton.h"
 #include "chre/util/system/message_common.h"
 
-#include <pw_allocator/unique_ptr.h>
-#include <pw_containers/vector.h>
-#include <pw_function/function.h>
+#include "pw_allocator/unique_ptr.h"
+#include "pw_containers/vector.h"
+#include "pw_function/function.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -85,44 +87,32 @@ class MessageRouter {
     //! Callback called to iterate over all endpoints connected to the
     //! MessageHub. Underlying endpoint storage must not change during this
     //! callback. If function returns true, the MessageHub can stop iterating
-    //! over future endpoints. This function should not call any MessageRouter
-    //! or MessageHub functions. This function will be called with the
-    //! internal lock held.
+    //! over future endpoints.
     virtual void forEachEndpoint(
         const pw::Function<bool(const EndpointInfo &)> &function) = 0;
 
-    //! @return The EndpointInfo for the given endpoint ID. This function should
-    //! not call any MessageRouter or MessageHub functions. This function will
-    //! be called with the internal lock held.
+    //! @return The EndpointInfo for the given endpoint ID.
     virtual std::optional<EndpointInfo> getEndpointInfo(
         EndpointId endpointId) = 0;
 
     //! @return The first endpoint that has the given service descriptor, a
     //! null-terminated ASCII string. If no endpoint has the service descriptor,
-    //! std::nullopt is returned. This function should not call any
-    //! MessageRouter or MessageHub functions. This function will be called with
-    //! the internal lock held.
+    //! std::nullopt is returned.
     virtual std::optional<EndpointId> getEndpointForService(
         const char *serviceDescriptor) = 0;
 
     //! @return true if the endpoint has the given service descriptor, a
-    //! null-terminated ASCII string, false otherwise. This function should not
-    //! call any MessageRouter or MessageHub functions. This function will be
-    //! called with the internal lock held.
+    //! null-terminated ASCII string, false otherwise.
     virtual bool doesEndpointHaveService(EndpointId endpointId,
                                          const char *serviceDescriptor) = 0;
 
     //! Callback called when an endpoint is registered to any MessageHub,
-    //! except for this MessageHub. This function should not call any
-    //! MessageRouter or MessageHub functions. This function will be called with
-    //! the internal lock held.
+    //! except for this MessageHub.
     virtual void onEndpointRegistered(MessageHubId messageHubId,
                                       EndpointId endpointId) = 0;
 
     //! Callback called when an endpoint is unregistered from any MessageHub,
-    //! except for this MessageHub. This function should not call any
-    //! MessageRouter or MessageHub functions. This function will be called with
-    //! the internal lock held.
+    //! except for this MessageHub.
     virtual void onEndpointUnregistered(MessageHubId messageHubId,
                                         EndpointId endpointId) = 0;
   };
@@ -135,17 +125,15 @@ class MessageRouter {
     //! undefined behavior.
     MessageHub();
 
-    ~MessageHub() {
-      if (mRouter != nullptr) {
-        mRouter->unregisterMessageHub(mHubId);
-      }
-    }
     // There can only be one live MessageHub instance for a given hub ID, so
     // only move operations are supported.
     MessageHub(const MessageHub &) = delete;
     MessageHub &operator=(const MessageHub &) = delete;
     MessageHub(MessageHub &&other);
     MessageHub &operator=(MessageHub &&other);
+
+    //! Destructor. Unregisters the MessageHub from the MessageRouter.
+    ~MessageHub();
 
     //! Accepts the session open request from the peer message hub.
     //! onSessionOpened will be called on both hubs.
@@ -189,10 +177,15 @@ class MessageRouter {
     //! @param messagePermissions The permissions of the message, a bit flagged
     //! value
     //! @param sessionId The session to send the message on
+    //! @param fromEndpointId The endpoint ID of the sender or ENDPOINT_ID_ANY
+    //! to allow MessageRouter to infer the sender endpoint ID. If the
+    //! sender endpoint ID cannot be inferred, (i.e. the session is between
+    //! endpoints on the same message hub), this function will return false.
     //! @return true if the message was sent, false if the message could not be
     //! sent
     bool sendMessage(pw::UniquePtr<std::byte[]> &&data, uint32_t messageType,
-                     uint32_t messagePermissions, SessionId sessionId);
+                     uint32_t messagePermissions, SessionId sessionId,
+                     EndpointId fromEndpointId = ENDPOINT_ID_ANY);
 
     //! Registers an endpoint with the MessageHub.
     //! @return true if the endpoint was registered, otherwise false.
@@ -204,6 +197,13 @@ class MessageRouter {
 
     //! @return The MessageHub ID of the currently connected MessageHub
     MessageHubId getId();
+
+    //! @return If the MessageHub is active and registered with the
+    //! MessageRouter.
+    bool isRegistered();
+
+    //! Unregisters this MessageHub from the MessageRouter.
+    void unregister();
 
    private:
     friend class MessageRouter;
@@ -263,8 +263,8 @@ class MessageRouter {
       const pw::Function<bool(const EndpointInfo &)> &function);
 
   //! Executes the function for each endpoint connected to all Message Hubs.
-  //! The lock is held when calling the callback.
-  void forEachEndpoint(
+  //! @return true if successful, false if failed
+  bool forEachEndpoint(
       const pw::Function<void(const MessageHubInfo &, const EndpointInfo &)>
           &function);
 
@@ -285,9 +285,9 @@ class MessageRouter {
                                const char *serviceDescriptor);
 
   //! Executes the function for each MessageHub connected to the
-  //! MessageRouter. If function returns true, the iteration will stop. The
-  //! lock is held when calling the callback.
-  void forEachMessageHub(
+  //! MessageRouter. If function returns true, the iteration will stop.
+  //! @return true if successful, false if failed
+  bool forEachMessageHub(
       const pw::Function<bool(const MessageHubInfo &)> &function);
 
  private:
@@ -353,7 +353,7 @@ class MessageRouter {
   //! sent
   bool sendMessage(pw::UniquePtr<std::byte[]> &&data, uint32_t messageType,
                    uint32_t messagePermissions, SessionId sessionId,
-                   MessageHubId fromMessageHubId);
+                   EndpointId fromEndpointId, MessageHubId fromMessageHubId);
 
   //! Registers an endpoint with the MessageHub.
   //! @return true if the endpoint was registered, otherwise false.
@@ -370,6 +370,9 @@ class MessageRouter {
   bool onEndpointRegistrationStateChanged(MessageHubId messageHubId,
                                           EndpointId endpointId,
                                           bool isRegistered);
+
+  //! @return The a copy of the list of MessageHubRecords
+  std::optional<DynamicVector<MessageHubRecord>> getMessageHubRecords();
 
   //! @return The MessageHubRecord for the given MessageHub ID
   const MessageHubRecord *getMessageHubRecordLocked(MessageHubId messageHubId);

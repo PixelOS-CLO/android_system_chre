@@ -14,24 +14,21 @@
  * limitations under the License.
  */
 
-#include <algorithm>
-#include <cstddef>
-#include <cstdint>
-#include <optional>
-#include <utility>
-
 #include "chre/util/dynamic_vector.h"
+#include "chre/util/system/callback_allocator.h"
 #include "chre/util/system/message_common.h"
 #include "chre/util/system/message_router.h"
-#include "chre/util/system/message_router_callback_allocator.h"
 #include "chre_api/chre.h"
 
-#include "pw_allocator/allocator.h"
-#include "pw_allocator/capability.h"
 #include "pw_allocator/libc_allocator.h"
 #include "pw_allocator/unique_ptr.h"
 
 #include "gtest/gtest.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <utility>
 
 namespace chre::message {
 namespace {
@@ -865,7 +862,7 @@ TEST_F(MessageRouterTest, UnregisterMessageHubCausesSessionClosed) {
   EXPECT_FALSE(messageHub->getSessionWithId(sessionId).has_value());
 }
 
-TEST_F(MessageRouterTest, RegisterSessionSameMessageHubInvalid) {
+TEST_F(MessageRouterTest, RegisterSessionSameMessageHubIsValid) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
   Session sessionFromCallback1;
   Session sessionFromCallback2;
@@ -884,12 +881,12 @@ TEST_F(MessageRouterTest, RegisterSessionSameMessageHubInvalid) {
   // Open session from messageHub:2 to messageHub:2
   SessionId sessionId = messageHub->openSession(
       kEndpointInfos[1].id, messageHub->getId(), kEndpointInfos[1].id);
-  EXPECT_EQ(sessionId, SESSION_ID_INVALID);
+  EXPECT_NE(sessionId, SESSION_ID_INVALID);
 
   // Open session from messageHub:1 to messageHub:3
   sessionId = messageHub->openSession(kEndpointInfos[0].id, messageHub->getId(),
                                       kEndpointInfos[2].id);
-  EXPECT_EQ(sessionId, SESSION_ID_INVALID);
+  EXPECT_NE(sessionId, SESSION_ID_INVALID);
 }
 
 TEST_F(MessageRouterTest, RegisterSessionReservedSessionIdAreRespected) {
@@ -1340,11 +1337,9 @@ TEST_F(MessageRouterTest, SendMessageToSessionUsingPointerAndFreeCallback) {
     size_t length;
   };
 
-  pw::Vector<
-      MessageRouterCallbackAllocator<FreeCallbackContext>::FreeCallbackRecord,
-      10>
+  pw::Vector<CallbackAllocator<FreeCallbackContext>::CallbackRecord, 10>
       freeCallbackRecords;
-  MessageRouterCallbackAllocator<FreeCallbackContext> allocator(
+  CallbackAllocator<FreeCallbackContext> allocator(
       [](std::byte *message, size_t length, FreeCallbackContext &&context) {
         *context.freeCallbackCalled =
             message == context.message && length == context.length;
