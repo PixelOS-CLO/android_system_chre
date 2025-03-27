@@ -14,21 +14,27 @@
  * limitations under the License.
  */
 
+#include "chre/util/system/message_router.h"
+
 #include "chre/util/dynamic_vector.h"
 #include "chre/util/system/callback_allocator.h"
 #include "chre/util/system/message_common.h"
-#include "chre/util/system/message_router.h"
+#include "chre/util/system/message_router_mocks.h"
 #include "chre_api/chre.h"
 
 #include "pw_allocator/libc_allocator.h"
 #include "pw_allocator/unique_ptr.h"
+#include "pw_intrusive_ptr/intrusive_ptr.h"
 
+#include "gmock/gmock.h"
 #include "gtest/gtest.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <utility>
+
+using ::testing::_;
 
 namespace chre::message {
 namespace {
@@ -49,16 +55,21 @@ const char kServiceDescriptorForEndpoint2[] = "TEST_SERVICE.TEST";
 
 class MessageRouterTest : public ::testing::Test {};
 
+//! Iterates over the endpoints
+void forEachEndpoint(const pw::Function<bool(const EndpointInfo &)> &function) {
+  for (const EndpointInfo &endpointInfo : kEndpointInfos) {
+    if (function(endpointInfo)) {
+      return;
+    }
+  }
+}
+
 //! Base class for MessageHubCallbacks used in tests
 class MessageHubCallbackBase : public MessageRouter::MessageHubCallback {
  public:
   void forEachEndpoint(
       const pw::Function<bool(const EndpointInfo &)> &function) override {
-    for (const EndpointInfo &endpointInfo : kEndpointInfos) {
-      if (function(endpointInfo)) {
-        return;
-      }
-    }
+    ::chre::message::forEachEndpoint(function);
   }
 
   std::optional<EndpointInfo> getEndpointInfo(EndpointId endpointId) override {
@@ -87,11 +98,27 @@ class MessageHubCallbackBase : public MessageRouter::MessageHubCallback {
            std::strcmp(serviceDescriptor, kServiceDescriptorForEndpoint2) == 0;
   }
 
+  void forEachService(
+      const pw::Function<bool(const EndpointInfo &, const ServiceInfo &)>
+          &function) override {
+    function(kEndpointInfos[1],
+             ServiceInfo(kServiceDescriptorForEndpoint2, /* majorVersion= */ 1,
+                         /* minorVersion= */ 0, RpcFormat::CUSTOM));
+  }
+
+  void onHubRegistered(const MessageHubInfo & /* info */) override {}
+
+  void onHubUnregistered(MessageHubId /* id */) override {}
+
   void onEndpointRegistered(MessageHubId /* messageHubId */,
                             EndpointId /* endpointId */) override {}
 
   void onEndpointUnregistered(MessageHubId /* messageHubId */,
                               EndpointId /* endpointId */) override {}
+
+  void pw_recycle() override {
+    delete this;
+  }
 };
 
 //! MessageHubCallback that stores the data passed to onMessageReceived and
@@ -269,8 +296,9 @@ class MessageHubCallbackCallsMessageHubApisDuringCallback
 TEST_F(MessageRouterTest, RegisterMessageHubNameIsUnique) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
 
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub1 =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub1.has_value());
@@ -286,8 +314,9 @@ TEST_F(MessageRouterTest, RegisterMessageHubNameIsUnique) {
 TEST_F(MessageRouterTest, RegisterMessageHubIdIsUnique) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
 
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub1 =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub1.has_value());
@@ -303,8 +332,9 @@ TEST_F(MessageRouterTest, RegisterMessageHubIdIsUnique) {
 TEST_F(MessageRouterTest, RegisterMessageHubGetListOfHubs) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
 
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub1 =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub1.has_value());
@@ -336,8 +366,9 @@ TEST_F(MessageRouterTest, RegisterMessageHubGetListOfHubs) {
 TEST_F(MessageRouterTest, RegisterMessageHubGetListOfHubsWithUnregister) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
 
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub1 =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub1.has_value());
@@ -388,8 +419,9 @@ TEST_F(MessageRouterTest, RegisterMessageHubTooManyFails) {
   static_assert(kMaxMessageHubs == 3);
   constexpr const char *kNames[3] = {"hub1", "hub2", "hub3"};
 
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   MessageRouter::MessageHub messageHubs[kMaxMessageHubs];
   for (size_t i = 0; i < kMaxMessageHubs; ++i) {
     std::optional<MessageRouter::MessageHub> messageHub =
@@ -407,8 +439,9 @@ TEST_F(MessageRouterTest, RegisterMessageHubTooManyFails) {
 TEST_F(MessageRouterTest, GetEndpointInfo) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
 
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub1 =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub1.has_value());
@@ -435,8 +468,9 @@ TEST_F(MessageRouterTest, GetEndpointInfo) {
 TEST_F(MessageRouterTest, GetEndpointForService) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
 
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub1 =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub1.has_value());
@@ -452,8 +486,9 @@ TEST_F(MessageRouterTest, GetEndpointForService) {
 TEST_F(MessageRouterTest, DoesEndpointHaveService) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
 
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub1 =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub1.has_value());
@@ -463,11 +498,35 @@ TEST_F(MessageRouterTest, DoesEndpointHaveService) {
                                              kServiceDescriptorForEndpoint2));
 }
 
+TEST_F(MessageRouterTest, ForEachService) {
+  MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
+
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
+  std::optional<MessageRouter::MessageHub> messageHub1 =
+      router.registerMessageHub("hub1", /* id= */ 1, callback);
+  EXPECT_TRUE(messageHub1.has_value());
+
+  router.forEachService([](const MessageHubInfo &hub,
+                           const EndpointInfo &endpoint,
+                           const ServiceInfo &service) {
+    EXPECT_EQ(hub.id, 1);
+    EXPECT_EQ(endpoint.id, kEndpointInfos[1].id);
+    EXPECT_STREQ(service.serviceDescriptor, kServiceDescriptorForEndpoint2);
+    EXPECT_EQ(service.majorVersion, 1);
+    EXPECT_EQ(service.minorVersion, 0);
+    EXPECT_EQ(service.format, RpcFormat::CUSTOM);
+    return true;
+  });
+}
+
 TEST_F(MessageRouterTest, GetEndpointForServiceBadServiceDescriptor) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
 
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub1 =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub1.has_value());
@@ -485,10 +544,12 @@ TEST_F(MessageRouterTest, RegisterSessionTwoDifferentMessageHubs) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
   Session sessionFromCallback1;
   Session sessionFromCallback2;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       &sessionFromCallback1);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback2);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -537,12 +598,14 @@ TEST_F(MessageRouterTest, RegisterSessionVerifyAllCallbacksAreCalled) {
   Session sessionOpenedFromCallback2;
   Reason sessionCloseReason1;
   Reason sessionCloseReason2;
-  MessageHubCallbackStoreData callback(
-      /* message= */ nullptr, &sessionClosedFromCallback1, &sessionCloseReason1,
-      &sessionOpenedFromCallback1);
-  MessageHubCallbackStoreData callback2(
-      /* message= */ nullptr, &sessionClosedFromCallback2, &sessionCloseReason2,
-      &sessionOpenedFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(
+          /* message= */ nullptr, &sessionClosedFromCallback1,
+          &sessionCloseReason1, &sessionOpenedFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(
+          /* message= */ nullptr, &sessionClosedFromCallback2,
+          &sessionCloseReason2, &sessionOpenedFromCallback2);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -603,10 +666,12 @@ TEST_F(MessageRouterTest, RegisterSessionGetsRejectedAndClosed) {
   Session sessionFromCallback1;
   Session sessionFromCallback2;
   Reason sessionCloseReason;
-  MessageHubCallbackStoreData callback(
-      /* message= */ nullptr, &sessionFromCallback1, &sessionCloseReason);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(
+          /* message= */ nullptr, &sessionFromCallback1, &sessionCloseReason);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback2);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -643,8 +708,12 @@ TEST_F(MessageRouterTest, RegisterSessionSecondHubDoesNotRespond) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
   bool wasOpenSessionRequestCalled = false;
   bool wasOpenSessionRequestCalled2 = false;
-  MessageHubCallbackOpenSessionRequest callback(&wasOpenSessionRequestCalled);
-  MessageHubCallbackOpenSessionRequest callback2(&wasOpenSessionRequestCalled2);
+  pw::IntrusivePtr<MessageHubCallbackOpenSessionRequest> callback =
+      pw::MakeRefCounted<MessageHubCallbackOpenSessionRequest>(
+          &wasOpenSessionRequestCalled);
+  pw::IntrusivePtr<MessageHubCallbackOpenSessionRequest> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackOpenSessionRequest>(
+          &wasOpenSessionRequestCalled2);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -680,10 +749,12 @@ TEST_F(MessageRouterTest, RegisterSessionWithServiceDescriptor) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
   Session sessionFromCallback1;
   Session sessionFromCallback2;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       &sessionFromCallback1);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback2);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -732,10 +803,12 @@ TEST_F(MessageRouterTest,
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
   Session sessionFromCallback1;
   Session sessionFromCallback2;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       &sessionFromCallback1);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback2);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -798,10 +871,12 @@ TEST_F(MessageRouterTest, RegisterSessionWithBadServiceDescriptor) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
   Session sessionFromCallback1;
   Session sessionFromCallback2;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       &sessionFromCallback1);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback2);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -821,10 +896,12 @@ TEST_F(MessageRouterTest, UnregisterMessageHubCausesSessionClosed) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
   Session sessionFromCallback1;
   Session sessionFromCallback2;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       &sessionFromCallback1);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback2);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -866,10 +943,12 @@ TEST_F(MessageRouterTest, RegisterSessionSameMessageHubIsValid) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
   Session sessionFromCallback1;
   Session sessionFromCallback2;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       &sessionFromCallback1);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback2);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -893,10 +972,12 @@ TEST_F(MessageRouterTest, RegisterSessionReservedSessionIdAreRespected) {
   constexpr SessionId kReservedSessionId = 25;
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router(
       kReservedSessionId);
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -920,10 +1001,12 @@ TEST_F(MessageRouterTest, RegisterSessionOpenSessionNotReservedRegionRejected) {
   constexpr SessionId kReservedSessionId = 25;
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router(
       kReservedSessionId);
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -944,10 +1027,12 @@ TEST_F(MessageRouterTest, RegisterSessionOpenSessionWithReservedSessionId) {
   constexpr SessionId kReservedSessionId = 25;
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router(
       kReservedSessionId);
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -970,10 +1055,12 @@ TEST_F(MessageRouterTest, RegisterSessionDifferentMessageHubsSameEndpoints) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
   Session sessionFromCallback1;
   Session sessionFromCallback2;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       &sessionFromCallback1);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback2);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -992,10 +1079,12 @@ TEST_F(MessageRouterTest, RegisterSessionDifferentMessageHubsSameEndpoints) {
 TEST_F(MessageRouterTest,
        RegisterSessionTwoDifferentMessageHubsInvalidEndpoint) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -1016,12 +1105,15 @@ TEST_F(MessageRouterTest, ThirdMessageHubTriesToFindOthersSession) {
   Session sessionFromCallback1;
   Session sessionFromCallback2;
   Session sessionFromCallback3;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       &sessionFromCallback1);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        &sessionFromCallback2);
-  MessageHubCallbackStoreData callback3(/* message= */ nullptr,
-                                        &sessionFromCallback3);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback3 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      &sessionFromCallback3);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -1086,12 +1178,15 @@ TEST_F(MessageRouterTest, ThirdMessageHubTriesToFindOthersSession) {
 
 TEST_F(MessageRouterTest, ThreeMessageHubsAndThreeSessions) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        /* session= */ nullptr);
-  MessageHubCallbackStoreData callback3(/* message= */ nullptr,
-                                        /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback3 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -1175,12 +1270,15 @@ TEST_F(MessageRouterTest, SendMessageToSession) {
   Session sessionFromCallback1;
   Session sessionFromCallback2;
   Session sessionFromCallback3;
-  MessageHubCallbackStoreData callback(&messageFromCallback1,
-                                       &sessionFromCallback1);
-  MessageHubCallbackStoreData callback2(&messageFromCallback2,
-                                        &sessionFromCallback2);
-  MessageHubCallbackStoreData callback3(&messageFromCallback3,
-                                        &sessionFromCallback3);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(&messageFromCallback1,
+                                                      &sessionFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(&messageFromCallback2,
+                                                      &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback3 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(&messageFromCallback3,
+                                                      &sessionFromCallback3);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -1262,10 +1360,12 @@ TEST_F(MessageRouterTest, SendMessageOnHalfOpenSessionIsRejected) {
   Message messageFromCallback2;
   Session sessionFromCallback1;
   Session sessionFromCallback2;
-  MessageHubCallbackStoreData callback(&messageFromCallback1,
-                                       &sessionFromCallback1);
-  MessageHubCallbackStoreData callback2(&messageFromCallback2,
-                                        &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(&messageFromCallback1,
+                                                      &sessionFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(&messageFromCallback2,
+                                                      &sessionFromCallback2);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -1359,12 +1459,15 @@ TEST_F(MessageRouterTest, SendMessageToSessionUsingPointerAndFreeCallback) {
   Session sessionFromCallback1;
   Session sessionFromCallback2;
   Session sessionFromCallback3;
-  MessageHubCallbackStoreData callback(&messageFromCallback1,
-                                       &sessionFromCallback1);
-  MessageHubCallbackStoreData callback2(&messageFromCallback2,
-                                        &sessionFromCallback2);
-  MessageHubCallbackStoreData callback3(&messageFromCallback3,
-                                        &sessionFromCallback3);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(&messageFromCallback1,
+                                                      &sessionFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(&messageFromCallback2,
+                                                      &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback3 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(&messageFromCallback3,
+                                                      &sessionFromCallback3);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -1475,12 +1578,15 @@ TEST_F(MessageRouterTest, SendMessageToSessionInvalidHubAndSession) {
   Session sessionFromCallback1;
   Session sessionFromCallback2;
   Session sessionFromCallback3;
-  MessageHubCallbackStoreData callback(&messageFromCallback1,
-                                       &sessionFromCallback1);
-  MessageHubCallbackStoreData callback2(&messageFromCallback2,
-                                        &sessionFromCallback2);
-  MessageHubCallbackStoreData callback3(&messageFromCallback3,
-                                        &sessionFromCallback3);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(&messageFromCallback1,
+                                                      &sessionFromCallback1);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(&messageFromCallback2,
+                                                      &sessionFromCallback2);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback3 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(&messageFromCallback3,
+                                                      &sessionFromCallback3);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
@@ -1538,15 +1644,18 @@ TEST_F(MessageRouterTest, SendMessageToSessionCallbackFailureClosesSession) {
   bool wasMessageReceivedCalled1 = false;
   bool wasMessageReceivedCalled2 = false;
   bool wasMessageReceivedCalled3 = false;
-  MessageHubCallbackAlwaysFails callback1(
-      &wasMessageReceivedCalled1,
-      /* wasSessionClosedCalled= */ nullptr);
-  MessageHubCallbackAlwaysFails callback2(
-      &wasMessageReceivedCalled2,
-      /* wasSessionClosedCalled= */ nullptr);
-  MessageHubCallbackAlwaysFails callback3(
-      &wasMessageReceivedCalled3,
-      /* wasSessionClosedCalled= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackAlwaysFails> callback1 =
+      pw::MakeRefCounted<MessageHubCallbackAlwaysFails>(
+          &wasMessageReceivedCalled1,
+          /* wasSessionClosedCalled= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackAlwaysFails> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackAlwaysFails>(
+          &wasMessageReceivedCalled2,
+          /* wasSessionClosedCalled= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackAlwaysFails> callback3 =
+      pw::MakeRefCounted<MessageHubCallbackAlwaysFails>(
+          &wasMessageReceivedCalled3,
+          /* wasSessionClosedCalled= */ nullptr);
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback1);
@@ -1630,22 +1739,28 @@ TEST_F(MessageRouterTest, MessageHubCallbackCanCallOtherMessageHubAPIs) {
     messageData[i] = static_cast<std::byte>(i + 1);
   }
 
-  MessageHubCallbackCallsMessageHubApisDuringCallback callback;
-  MessageHubCallbackCallsMessageHubApisDuringCallback callback2;
-  MessageHubCallbackCallsMessageHubApisDuringCallback callback3;
+  pw::IntrusivePtr<MessageHubCallbackCallsMessageHubApisDuringCallback>
+      callback = pw::MakeRefCounted<
+          MessageHubCallbackCallsMessageHubApisDuringCallback>();
+  pw::IntrusivePtr<MessageHubCallbackCallsMessageHubApisDuringCallback>
+      callback2 = pw::MakeRefCounted<
+          MessageHubCallbackCallsMessageHubApisDuringCallback>();
+  pw::IntrusivePtr<MessageHubCallbackCallsMessageHubApisDuringCallback>
+      callback3 = pw::MakeRefCounted<
+          MessageHubCallbackCallsMessageHubApisDuringCallback>();
 
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub.has_value());
-  callback.setMessageHub(&messageHub.value());
+  callback->setMessageHub(&messageHub.value());
   std::optional<MessageRouter::MessageHub> messageHub2 =
       router.registerMessageHub("hub2", /* id= */ 2, callback2);
   EXPECT_TRUE(messageHub2.has_value());
-  callback2.setMessageHub(&messageHub2.value());
+  callback2->setMessageHub(&messageHub2.value());
   std::optional<MessageRouter::MessageHub> messageHub3 =
       router.registerMessageHub("hub3", /* id= */ 3, callback3);
   EXPECT_TRUE(messageHub3.has_value());
-  callback3.setMessageHub(&messageHub3.value());
+  callback3->setMessageHub(&messageHub3.value());
 
   // Open session from messageHub:1 to messageHub2:2
   SessionId sessionId = messageHub->openSession(
@@ -1690,8 +1805,9 @@ TEST_F(MessageRouterTest, MessageHubCallbackCanCallOtherMessageHubAPIs) {
 
 TEST_F(MessageRouterTest, ForEachEndpointOfHub) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub.has_value());
@@ -1718,8 +1834,9 @@ TEST_F(MessageRouterTest, ForEachEndpoint) {
   constexpr MessageHubId kHubId = 1;
 
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub(kHubName, kHubId, callback);
   EXPECT_TRUE(messageHub.has_value());
@@ -1745,8 +1862,9 @@ TEST_F(MessageRouterTest, ForEachEndpoint) {
 
 TEST_F(MessageRouterTest, ForEachEndpointOfHubInvalidHub) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub.has_value());
@@ -1762,10 +1880,12 @@ TEST_F(MessageRouterTest, ForEachEndpointOfHubInvalidHub) {
 
 TEST_F(MessageRouterTest, RegisterEndpointCallbacksAreCalled) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub.has_value());
@@ -1775,16 +1895,18 @@ TEST_F(MessageRouterTest, RegisterEndpointCallbacksAreCalled) {
 
   // Register the endpoint and verify that the callbacks were called
   EXPECT_TRUE(messageHub->registerEndpoint(kEndpointInfos[0].id));
-  EXPECT_TRUE(callback2.hasEndpointBeenRegistered(messageHub->getId(),
-                                                  kEndpointInfos[0].id));
+  EXPECT_TRUE(callback2->hasEndpointBeenRegistered(messageHub->getId(),
+                                                   kEndpointInfos[0].id));
 }
 
 TEST_F(MessageRouterTest, UnregisterEndpointCallbacksAreCalled) {
   MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
-  MessageHubCallbackStoreData callback(/* message= */ nullptr,
-                                       /* session= */ nullptr);
-  MessageHubCallbackStoreData callback2(/* message= */ nullptr,
-                                        /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
+  pw::IntrusivePtr<MessageHubCallbackStoreData> callback2 =
+      pw::MakeRefCounted<MessageHubCallbackStoreData>(/* message= */ nullptr,
+                                                      /* session= */ nullptr);
   std::optional<MessageRouter::MessageHub> messageHub =
       router.registerMessageHub("hub1", /* id= */ 1, callback);
   EXPECT_TRUE(messageHub.has_value());
@@ -1795,18 +1917,82 @@ TEST_F(MessageRouterTest, UnregisterEndpointCallbacksAreCalled) {
   // Register the endpoint and verify that the callbacks were called
   // only on the other hub
   EXPECT_TRUE(messageHub->registerEndpoint(kEndpointInfos[0].id));
-  EXPECT_FALSE(callback.hasEndpointBeenRegistered(messageHub->getId(),
-                                                  kEndpointInfos[0].id));
-  EXPECT_TRUE(callback2.hasEndpointBeenRegistered(messageHub->getId(),
-                                                  kEndpointInfos[0].id));
+  EXPECT_FALSE(callback->hasEndpointBeenRegistered(messageHub->getId(),
+                                                   kEndpointInfos[0].id));
+  EXPECT_TRUE(callback2->hasEndpointBeenRegistered(messageHub->getId(),
+                                                   kEndpointInfos[0].id));
 
   // Unregister the endpoint and verify that the callbacks were called
   // only on the other hub
   EXPECT_TRUE(messageHub->unregisterEndpoint(kEndpointInfos[0].id));
-  EXPECT_FALSE(callback.hasEndpointBeenRegistered(messageHub->getId(),
-                                                  kEndpointInfos[0].id));
-  EXPECT_FALSE(callback2.hasEndpointBeenRegistered(messageHub->getId(),
+  EXPECT_FALSE(callback->hasEndpointBeenRegistered(messageHub->getId(),
                                                    kEndpointInfos[0].id));
+  EXPECT_FALSE(callback2->hasEndpointBeenRegistered(messageHub->getId(),
+                                                    kEndpointInfos[0].id));
+}
+
+MATCHER_P(HubMatcher, id, "Matches id in MessageHubInfo") {
+  return arg.id == id;
+}
+
+TEST_F(MessageRouterTest, OnRegisterAndUnregisterHub) {
+  MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
+  pw::IntrusivePtr<MockMessageHubCallback> hub1Callback =
+      pw::MakeRefCounted<MockMessageHubCallback>();
+  pw::IntrusivePtr<MockMessageHubCallback> hub2Callback =
+      pw::MakeRefCounted<MockMessageHubCallback>();
+  MessageHubId hub1Id = 1, hub2Id = 2;
+  std::optional<MessageRouter::MessageHub> hub1 =
+      router.registerMessageHub("hub1", hub1Id, hub1Callback);
+  ASSERT_TRUE(hub1.has_value());
+
+  EXPECT_CALL(*hub1Callback, onHubRegistered(HubMatcher(hub2Id)));
+  std::optional<MessageRouter::MessageHub> hub2 =
+      router.registerMessageHub("hub2", hub2Id, hub2Callback);
+  ASSERT_TRUE(hub2.has_value());
+
+  EXPECT_CALL(*hub1Callback, onHubUnregistered(hub2Id));
+  hub2.reset();
+}
+
+MATCHER_P(SessionIdMatcher, id, "Matches id in Session") {
+  return arg.sessionId == id;
+}
+
+TEST_F(MessageRouterTest, SessionCallbacksAreCalledOnceSameHub) {
+  MessageRouterWithStorage<kMaxMessageHubs, kMaxSessions> router;
+  pw::IntrusivePtr<MockMessageHubCallback> hub1Callback =
+      pw::MakeRefCounted<MockMessageHubCallback>();
+  MessageHubId hub1Id = 1;
+  std::optional<MessageRouter::MessageHub> hub1 =
+      router.registerMessageHub("hub1", hub1Id, hub1Callback);
+  ASSERT_TRUE(hub1.has_value());
+
+  ON_CALL(*hub1Callback, forEachEndpoint).WillByDefault(forEachEndpoint);
+
+  // Try with different endpoints
+  SessionId sessionId = hub1->openSession(kEndpointInfos[0].id, hub1->getId(),
+                                          kEndpointInfos[1].id);
+  ASSERT_NE(sessionId, SESSION_ID_INVALID);
+
+  EXPECT_CALL(*hub1Callback, onSessionOpened(_)).Times(1);
+  hub1->onSessionOpenComplete(sessionId);
+
+  EXPECT_CALL(*hub1Callback, onSessionClosed(SessionIdMatcher(sessionId), _))
+      .Times(1);
+  hub1->closeSession(sessionId);
+
+  // Try with the same endpoint
+  SessionId sessionId2 = hub1->openSession(kEndpointInfos[1].id, hub1->getId(),
+                                           kEndpointInfos[1].id);
+  ASSERT_NE(sessionId2, SESSION_ID_INVALID);
+
+  EXPECT_CALL(*hub1Callback, onSessionOpened(_)).Times(1);
+  hub1->onSessionOpenComplete(sessionId2);
+
+  EXPECT_CALL(*hub1Callback, onSessionClosed(SessionIdMatcher(sessionId2), _))
+      .Times(1);
+  hub1->closeSession(sessionId2);
 }
 
 }  // namespace
