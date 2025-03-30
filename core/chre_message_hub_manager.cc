@@ -14,11 +14,10 @@
  * limitations under the License.
  */
 
-#include "chre/core/event_loop.h"
 #ifdef CHRE_MESSAGE_ROUTER_SUPPORT_ENABLED
 
 #include "chre/core/chre_message_hub_manager.h"
-#include "chre/core/event_loop_common.h"
+#include "chre/core/event_loop.h"
 #include "chre/core/event_loop_manager.h"
 #include "chre/core/nanoapp.h"
 #include "chre/platform/context.h"
@@ -31,6 +30,7 @@
 #include "chre/util/system/message_common.h"
 #include "chre/util/system/message_router.h"
 #include "chre/util/system/service_helpers.h"
+#include "chre/util/system/system_callback_type.h"
 #include "chre/util/unique_ptr.h"
 #include "chre_api/chre.h"
 
@@ -159,6 +159,8 @@ bool ChreMessageHubManager::getEndpointInfo(MessageHubId hubId,
   info.type = toChreEndpointType(endpointInfo->type);
   info.version = endpointInfo->version;
   info.requiredPermissions = endpointInfo->requiredPermissions;
+  // TODO(b/404241918): populate maxMessageSize from MessageRouter
+  info.maxMessageSize = chreGetMessageToHostMaxSize();
   std::strncpy(info.name, endpointInfo->name, CHRE_MAX_ENDPOINT_NAME_LEN);
   info.name[CHRE_MAX_ENDPOINT_NAME_LEN - 1] = '\0';
   return true;
@@ -286,18 +288,26 @@ bool ChreMessageHubManager::sendMessage(void *message, size_t messageSize,
                                         chreMessageFreeFunction *freeCallback,
                                         EndpointId fromEndpointId) {
   bool success = false;
-  pw::UniquePtr<std::byte[]> messageData =
-      mAllocator.MakeUniqueArrayWithCallback(
-          reinterpret_cast<std::byte *>(message), messageSize,
-          MessageFreeCallbackData{
-              .freeCallback = freeCallback,
-              .nanoappId = fromEndpointId});
-  if (messageData == nullptr) {
-    LOG_OOM();
+  if ((message == nullptr) != (freeCallback == nullptr)) {
+    // We don't allow this because a null callback with non-null message is
+    // susceptible to bugs where the nanoapp modifies the data while it is still
+    // being used by the system, and a non-null callback with null message is
+    // not meaningful since there is no data to release and we make no
+    // guarantees about when the callback is invoked.
+    LOGE("Mixing null and non-null message and free callback is not allowed");
   } else {
-    success = mChreMessageHub.sendMessage(std::move(messageData), messageType,
-                                          messagePermissions, sessionId,
-                                          fromEndpointId);
+    pw::UniquePtr<std::byte[]> messageData =
+        mAllocator.MakeUniqueArrayWithCallback(
+            reinterpret_cast<std::byte *>(message), messageSize,
+            MessageFreeCallbackData{.freeCallback = freeCallback,
+                                    .nanoappId = fromEndpointId});
+    if (messageData == nullptr) {
+      LOG_OOM();
+    } else {
+      success = mChreMessageHub.sendMessage(std::move(messageData), messageType,
+                                            messagePermissions, sessionId,
+                                            fromEndpointId);
+    }
   }
 
   if (!success && freeCallback != nullptr) {

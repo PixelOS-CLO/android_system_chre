@@ -43,24 +43,24 @@ void ContextHubV4Impl::init() {
   // is used both to initialize the CHRE-side host hub proxies and to request
   // embedded hub state.
   HostProtocolHostV4::encodeGetMessageHubsAndEndpointsRequest(builder);
-  // TODO(b/389991052): Uncomment the mSendMessageFn() lines below.
-  // if (!mSendMessageFn(builder))
-  //   LOGE("Failed to initialize CHRE host hub proxies");
-  mManager.forEachHostHub([](HostHub &hub) {
+  if (!mSendMessageFn(builder))
+    LOGE("Failed to initialize CHRE host hub proxies");
+  mManager.forEachHostHub([this](HostHub &hub) {
     flatbuffers::FlatBufferBuilder builder;
     HostProtocolHostV4::encodeRegisterMessageHub(builder, hub.info());
-    // if (!mSendMessageFn(builder)) {
-    //   LOGE("Failed to initialize proxy for host hub %" PRIu64, hub.id);
-    //   return;
-    // }
+    if (!mSendMessageFn(builder)) {
+      LOGE("Failed to initialize proxy for host hub %" PRIu64, hub.id());
+      return;
+    }
     for (const auto &endpoint : hub.getEndpoints()) {
       flatbuffers::FlatBufferBuilder builder;
       HostProtocolHostV4::encodeRegisterEndpoint(builder, endpoint);
-      // if (!mSendMessageFn(builder)) {
-      //   LOGE("Failed to initialize proxy for host endpoint (%" PRIu64 ", %"
-      //        PRIu64 ")", endpoint.hubId, endpoint.id);
-      //   return;
-      // }
+      if (!mSendMessageFn(builder)) {
+        LOGE("Failed to initialize proxy for host endpoint (%" PRIu64
+             ", %" PRIu64 ")",
+             endpoint.id.hubId, endpoint.id.id);
+        return;
+      }
     }
   });
 }
@@ -113,9 +113,10 @@ ScopedAStatus ContextHubV4Impl::getEndpoints(
 
 ScopedAStatus ContextHubV4Impl::registerEndpointHub(
     const std::shared_ptr<IEndpointCallback> &callback, const HubInfo &hubInfo,
-    std::shared_ptr<IEndpointCommunication> * /*hubInterface*/) {
+    std::shared_ptr<IEndpointCommunication> *hubInterface) {
   std::lock_guard lock(mHostHubOpLock);  // See header documentation.
-  auto statusOrHub = mManager.createHostHub(callback, hubInfo);
+  auto statusOrHub = mManager.createHostHub(
+      callback, hubInfo, AIBinder_getCallingUid(), AIBinder_getCallingPid());
   if (!statusOrHub.ok()) {
     LOGE("Failed to register message hub 0x%" PRIx64 " with %" PRId32,
          hubInfo.hubId, statusOrHub.status().ok());
@@ -123,19 +124,15 @@ ScopedAStatus ContextHubV4Impl::registerEndpointHub(
   }
   flatbuffers::FlatBufferBuilder builder;
   HostProtocolHostV4::encodeRegisterMessageHub(builder, hubInfo);
-  // TODO(b/389991052): Uncomment the following code.
-  // if (!mSendMessageFn(builder)) {
-  //   LOGE("Failed to send RegisterMessageHub for hub 0x%" PRIx64,
-  //   hubInfo.hubId);
-  //   (*statusOrHub)->unregister();
-  //   return ScopedAStatus::fromServiceSpecificError(
-  //       BnContextHub::EX_CONTEXT_HUB_UNSPECIFIED);
-  // }
-  // *hubInterface = ndk::SharedRefBase::make<HostHubInterface>(
-  //     std::move(*statusOrHub), mSendMessageFn, mHostHubOpLock);
-  // return ScopedAStatus::ok();
-  (*statusOrHub)->unregister();
-  return ScopedAStatus::fromExceptionCode(EX_UNSUPPORTED_OPERATION);
+  if (!mSendMessageFn(builder)) {
+    LOGE("Failed to send RegisterMessageHub for hub 0x%" PRIx64, hubInfo.hubId);
+    (*statusOrHub)->unregister();
+    return ScopedAStatus::fromServiceSpecificError(
+        BnContextHub::EX_CONTEXT_HUB_UNSPECIFIED);
+  }
+  *hubInterface = ndk::SharedRefBase::make<HostHubInterface>(
+      std::move(*statusOrHub), mSendMessageFn, mHostHubOpLock);
+  return ScopedAStatus::ok();
 }
 
 ScopedAStatus HostHubInterface::registerEndpoint(const EndpointInfo &endpoint) {
@@ -199,7 +196,8 @@ ScopedAStatus HostHubInterface::openEndpointSession(
     const std::optional<std::string> &serviceDescriptor) {
   // Ignore the flag to send a close. This hub overriding its own session is an
   // should just return error.
-  auto status = mHub->openSession(initiator, destination, sessionId).status();
+  auto status = mHub->openSession(initiator, destination, sessionId,
+                                  serviceDescriptor, /*hostInitiated=*/true);
   if (!status.ok()) {
     LOGE("Failed to open session %" PRId32 " from (0x%" PRIx64 ", 0x%" PRIx64
          ") to (0x%" PRIx64 ", 0x%" PRIx64 ") with %" PRId32,
@@ -214,7 +212,7 @@ ScopedAStatus HostHubInterface::openEndpointSession(
   if (!mSendMessageFn(builder)) {
     LOGE("Failed to send OpenEndpointSessionRequest for session %" PRId32,
          sessionId);
-    mHub->closeSession(sessionId).IgnoreError();
+    mHub->closeSession(sessionId, Reason::UNSPECIFIED).IgnoreError();
     return ScopedAStatus::fromServiceSpecificError(
         BnContextHub::EX_CONTEXT_HUB_UNSPECIFIED);
   }
@@ -285,7 +283,8 @@ ScopedAStatus HostHubInterface::closeEndpointSession(int32_t sessionId,
 }
 
 ScopedAStatus HostHubInterface::endpointSessionOpenComplete(int32_t sessionId) {
-  if (auto status = mHub->ackSession(sessionId); !status.ok()) {
+  if (auto status = mHub->ackSession(sessionId, /*hostAcked=*/true);
+      !status.ok()) {
     LOGE("Failed to verify session %" PRId32 " on hub 0x%" PRIx64
          " with %" PRId32,
          sessionId, mHub->id(), status.code());
@@ -330,6 +329,9 @@ bool ContextHubV4Impl::handleMessageFromChre(
     case ChreMessage::RegisterEndpoint:
       onRegisterEndpoint(*message.AsRegisterEndpoint());
       break;
+    case ChreMessage::UnregisterEndpoint:
+      onUnregisterEndpoint(*message.AsUnregisterEndpoint());
+      break;
     case ChreMessage::OpenEndpointSessionRequest:
       onOpenEndpointSessionRequest(*message.AsOpenEndpointSessionRequest());
       break;
@@ -345,6 +347,12 @@ bool ContextHubV4Impl::handleMessageFromChre(
     case ChreMessage::EndpointSessionMessageDeliveryStatus:
       onEndpointSessionMessageDeliveryStatus(
           *message.AsEndpointSessionMessageDeliveryStatus());
+      break;
+    case ChreMessage::AddServiceToEndpoint:
+      onAddServiceToEndpoint(*message.AsAddServiceToEndpoint());
+      break;
+    case ChreMessage::EndpointReady:
+      onEndpointReady(*message.AsEndpointReady());
       break;
     default:
       LOGW("Got unexpected message type %" PRIu8,
@@ -385,6 +393,22 @@ void ContextHubV4Impl::onRegisterEndpoint(
   mManager.addEmbeddedEndpoint(endpoint);
 }
 
+void ContextHubV4Impl::onAddServiceToEndpoint(
+    const ::chre::fbs::AddServiceToEndpointT &msg) {
+  EndpointId endpoint;
+  Service service;
+  HostProtocolHostV4::decodeAddServiceToEndpoint(msg, endpoint, service);
+  mManager.addEmbeddedEndpointService(endpoint, service);
+}
+
+void ContextHubV4Impl::onEndpointReady(const ::chre::fbs::EndpointReadyT &msg) {
+  EndpointId endpoint;
+  HostProtocolHostV4::decodeEndpointReady(msg, endpoint);
+  LOGI("Embedded endpoint (0x%" PRIx64 ", 0x%" PRIx64 ") ready", endpoint.hubId,
+       endpoint.id);
+  mManager.setEmbeddedEndpointReady(endpoint);
+}
+
 void ContextHubV4Impl::onUnregisterEndpoint(
     const ::chre::fbs::UnregisterEndpointT &msg) {
   EndpointId endpoint;
@@ -413,24 +437,18 @@ void ContextHubV4Impl::onOpenEndpointSessionRequest(
   }
 
   // Record the open session request and pass it on to the appropriate client.
-  pw::Result<bool> statusOrSendClose =
-      hub->openSession(local, remote, sessionId);
-  if (!statusOrSendClose.ok()) {
+  auto status =
+      hub->openSession(local, remote, sessionId, std::move(serviceDescriptor),
+                       /*hostInitiated=*/false);
+  if (!status.ok()) {
     LOGE("Failed to request session %" PRIu16 " with %" PRId32, sessionId,
-         statusOrSendClose.status().code());
+         status.code());
     flatbuffers::FlatBufferBuilder builder;
     HostProtocolHostV4::encodeEndpointSessionClosed(
         builder, hub->id(), sessionId, Reason::UNSPECIFIED);
     mSendMessageFn(builder);
     return;
-  } else if (*statusOrSendClose) {
-    // Send a closed session notification on the hub that hosted the pruned
-    // session.
-    hub->callback()->onCloseEndpointSession(sessionId, Reason::UNSPECIFIED);
-    LOGD("Pruned session %" PRIu16, sessionId);
   }
-  hub->callback()->onEndpointSessionOpenRequest(sessionId, local, remote,
-                                                std::move(serviceDescriptor));
 }
 
 void ContextHubV4Impl::onEndpointSessionOpened(
@@ -445,14 +463,11 @@ void ContextHubV4Impl::onEndpointSessionOpened(
     LOGW("Unable to find host hub");
     return;
   }
-  if (auto status = hub->ackSession(sessionId); !status.ok()) {
+  if (auto status = hub->ackSession(sessionId, /*hostAcked=*/false);
+      !status.ok()) {
     handleSessionFailure(hub, sessionId, status);
     return;
   }
-  // Only send a session open complete message to the host hub client if it was
-  // the initiator.
-  if (sessionId >= MessageHubManager::kHostSessionIdBase)
-    hub->callback()->onEndpointSessionOpenComplete(sessionId);
 }
 
 void ContextHubV4Impl::onEndpointSessionClosed(
@@ -468,8 +483,7 @@ void ContextHubV4Impl::onEndpointSessionClosed(
     LOGW("Unable to find host hub");
     return;
   }
-  if (!hub->closeSession(sessionId).ok()) return;
-  hub->callback()->onCloseEndpointSession(sessionId, reason);
+  hub->closeSession(sessionId, reason).IgnoreError();
 }
 
 void ContextHubV4Impl::onEndpointSessionMessage(
@@ -484,11 +498,9 @@ void ContextHubV4Impl::onEndpointSessionMessage(
     LOGW("Unable to find host hub");
     return;
   }
-  if (auto status = hub->checkSessionOpen(sessionId); !status.ok()) {
-    handleSessionFailure(hub, sessionId, status);
-    return;
-  }
-  hub->callback()->onMessageReceived(sessionId, message);
+  auto status = hub->handleMessage(sessionId, message);
+  if (status.ok()) return;
+  handleSessionFailure(hub, sessionId, status);
 }
 
 void ContextHubV4Impl::onEndpointSessionMessageDeliveryStatus(
@@ -503,12 +515,9 @@ void ContextHubV4Impl::onEndpointSessionMessageDeliveryStatus(
     LOGW("Unable to find host hub");
     return;
   }
-  if (auto status = hub->checkSessionOpen(sessionId); !status.ok()) {
-    handleSessionFailure(hub, sessionId, status);
-    return;
-  }
-  // TODO(b/378545373): Handle reliable messages.
-  hub->callback()->onMessageDeliveryStatusReceived(sessionId, deliveryStatus);
+  auto status = hub->handleMessageDeliveryStatus(sessionId, deliveryStatus);
+  if (status.ok()) return;
+  handleSessionFailure(hub, sessionId, status);
 }
 
 void ContextHubV4Impl::unlinkDeadHostHub(
@@ -534,8 +543,7 @@ void ContextHubV4Impl::handleSessionFailure(const std::shared_ptr<HostHub> &hub,
   HostProtocolHostV4::encodeEndpointSessionClosed(builder, hub->id(), session,
                                                   Reason::UNSPECIFIED);
   mSendMessageFn(builder);
-  hub->closeSession(session).IgnoreError();
-  hub->callback()->onCloseEndpointSession(session, Reason::UNSPECIFIED);
+  hub->closeSession(session, Reason::UNSPECIFIED).IgnoreError();
 }
 
 }  // namespace android::hardware::contexthub::common::implementation

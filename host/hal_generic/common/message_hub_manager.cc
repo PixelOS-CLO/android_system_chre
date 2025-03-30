@@ -48,9 +48,7 @@ HostHub::HostHub(MessageHubManager &manager,
                  const HubInfo &info)
     : mManager(manager), kInfo(info) {
   auto *cookie = new DeathRecipientCookie{&mManager, kInfo.hubId};
-  if (AIBinder_linkToDeath(callback->asBinder().get(),
-                           mManager.mDeathRecipient.get(),
-                           cookie) != STATUS_OK) {
+  if (!manager.mDeathRecipient->linkCallback(callback, cookie).ok()) {
     LOGE("Failed to link callback for hub %" PRId64 " to death recipient",
          kInfo.hubId);
     delete cookie;
@@ -105,7 +103,8 @@ pw::Result<std::pair<uint16_t, uint16_t>> HostHub::reserveSessionIdRange(
          kInfo.hubId, size);
     return pw::Status::InvalidArgument();
   }
-  if (USHRT_MAX - mManager.mNextSessionId + 1 < size) {
+  if (mManager.mNextSessionId < kHostSessionIdBase ||
+      USHRT_MAX - mManager.mNextSessionId + 1 < size) {
     LOGW("Could not allocate %" PRIu16 " session ids, ids exhausted", size);
     return pw::Status::ResourceExhausted();
   }
@@ -115,18 +114,21 @@ pw::Result<std::pair<uint16_t, uint16_t>> HostHub::reserveSessionIdRange(
   return mSessionIdRanges.back();
 }
 
-pw::Result<bool> HostHub::openSession(const EndpointId &hostEndpoint,
-                                      const EndpointId &embeddedEndpoint,
-                                      uint16_t sessionId) {
+pw::Status HostHub::openSession(const EndpointId &hostEndpoint,
+                                const EndpointId &embeddedEndpoint,
+                                uint16_t sessionId,
+                                std::optional<std::string> serviceDescriptor,
+                                bool hostInitiated) {
   std::lock_guard lock(mManager.mLock);
   PW_TRY(checkValidLocked());
 
   // Lookup the endpoints.
-  PW_TRY(endpointExistsLocked(hostEndpoint));
-  PW_TRY(mManager.embeddedEndpointExistsLocked(embeddedEndpoint));
+  PW_TRY(endpointExistsLocked(
+      hostEndpoint, hostInitiated ? std::nullopt : serviceDescriptor));
+  PW_TRY(mManager.embeddedEndpointExistsLocked(
+      embeddedEndpoint, hostInitiated ? serviceDescriptor : std::nullopt));
 
   // Validate the session id.
-  bool hostInitiated = AIBinder_isHandlingTransaction();
   if (hostInitiated) {
     if (!sessionIdInRangeLocked(sessionId)) {
       LOGE("Session id %" PRIu16 " out of range for hub %" PRId64, sessionId,
@@ -142,14 +144,14 @@ pw::Result<bool> HostHub::openSession(const EndpointId &hostEndpoint,
   }
 
   // Prune a stale session with this id if present.
-  bool sendClose = false;
   if (auto it = mIdToSession.find(sessionId); it != mIdToSession.end()) {
     Session &session = it->second;
     // If the session is in a valid state, prune it if it was not host
     // initiated and is pending a final ack from message router.
     if (!hostInitiated && !session.mPendingDestination &&
         session.mPendingMessageRouter) {
-      sendClose = true;
+      mCallback->onCloseEndpointSession(sessionId, Reason::UNSPECIFIED);
+      LOGD("Pruned session %" PRIu16, sessionId);
     } else if (hostInitiated && session.mHostEndpoint == hostEndpoint) {
       LOGE("Hub %" PRId64 " trying to override its own session %" PRIu16,
            kInfo.hubId, sessionId);
@@ -167,10 +169,17 @@ pw::Result<bool> HostHub::openSession(const EndpointId &hostEndpoint,
   mIdToSession.emplace(
       std::piecewise_construct, std::forward_as_tuple(sessionId),
       std::forward_as_tuple(hostEndpoint, embeddedEndpoint, hostInitiated));
-  return sendClose;
+
+  // Pass a request from a embedded endpoint to the host endpoint.
+  if (!hostInitiated) {
+    mCallback->onEndpointSessionOpenRequest(sessionId, hostEndpoint,
+                                            embeddedEndpoint,
+                                            std::move(serviceDescriptor));
+  }
+  return pw::OkStatus();
 }
 
-pw::Status HostHub::closeSession(uint16_t id) {
+pw::Status HostHub::closeSession(uint16_t id, std::optional<Reason> reason) {
   std::lock_guard lock(mManager.mLock);
   PW_TRY(checkValidLocked());
   auto it = mIdToSession.find(id);
@@ -179,43 +188,58 @@ pw::Status HostHub::closeSession(uint16_t id) {
     return pw::Status::NotFound();
   }
   mIdToSession.erase(it);
+  if (reason) mCallback->onCloseEndpointSession(id, *reason);
   return pw::OkStatus();
 }
 
 pw::Status HostHub::checkSessionOpen(uint16_t id) {
   std::lock_guard lock(mManager.mLock);
   PW_TRY(checkValidLocked());
-  PW_TRY_ASSIGN(Session * session, getSessionLocked(id));
-  if (!session->mPendingDestination && !session->mPendingMessageRouter)
-    return pw::OkStatus();
-  LOGE("Session %" PRIu16 " is pending", id);
-  return pw::Status::FailedPrecondition();
+  return checkSessionOpenLocked(id);
 }
 
-pw::Status HostHub::ackSession(uint16_t id) {
+pw::Status HostHub::ackSession(uint16_t id, bool hostAcked) {
   std::lock_guard lock(mManager.mLock);
   PW_TRY(checkValidLocked());
   PW_TRY_ASSIGN(Session * session, getSessionLocked(id));
-  bool isBinderCall = AIBinder_isHandlingTransaction();
   bool isHostSession = id >= kHostSessionIdBase;
   if (session->mPendingDestination) {
-    if (isHostSession == isBinderCall) {
+    if (isHostSession == hostAcked) {
       LOGE("Session %" PRIu16 " must be acked by other side (host? %" PRId32
            ")",
-           id, !isBinderCall);
+           id, !hostAcked);
       return pw::Status::PermissionDenied();
     }
     session->mPendingDestination = false;
+    // Notify the initiator that the session has been opened.
+    if (isHostSession) mCallback->onEndpointSessionOpenComplete(id);
   } else if (session->mPendingMessageRouter) {
-    if (isBinderCall) {
+    if (hostAcked) {
       LOGE("Message router must ack session %" PRIu16, id);
       return pw::Status::PermissionDenied();
     }
     session->mPendingMessageRouter = false;
   } else {
     LOGE("Received unexpected ack on session %" PRIu16 ", host: %" PRId32, id,
-         isBinderCall);
+         hostAcked);
   }
+  return pw::OkStatus();
+}
+
+pw::Status HostHub::handleMessage(uint16_t sessionId, const Message &message) {
+  std::lock_guard lock(mManager.mLock);
+  PW_TRY(checkValidLocked());
+  PW_TRY(checkSessionOpenLocked(sessionId));
+  mCallback->onMessageReceived(sessionId, message);
+  return pw::OkStatus();
+}
+
+pw::Status HostHub::handleMessageDeliveryStatus(
+    uint16_t sessionId, const MessageDeliveryStatus &status) {
+  std::lock_guard lock(mManager.mLock);
+  PW_TRY(checkValidLocked());
+  PW_TRY(checkSessionOpenLocked(sessionId));
+  mCallback->onMessageDeliveryStatusReceived(sessionId, status);
   return pw::OkStatus();
 }
 
@@ -223,9 +247,7 @@ pw::Status HostHub::unregister() {
   // If unlinkFromManager() fails, onClientDeath() was already called for this
   // and we do not need to unlink the death recipient.
   PW_TRY(unlinkFromManager());
-  if (AIBinder_unlinkToDeath(mCallback->asBinder().get(),
-                             mManager.mDeathRecipient.get(),
-                             mCookie) != STATUS_OK) {
+  if (!mManager.mDeathRecipient->unlinkCallback(mCallback, mCookie).ok()) {
     LOGW("Process hosting hub %" PRId64 " died simultaneously with unregister",
          kInfo.hubId);
   }
@@ -262,15 +284,23 @@ pw::Status HostHub::checkValidLocked() {
   return pw::OkStatus();
 }
 
-pw::Status HostHub::endpointExistsLocked(const EndpointId &id) {
+pw::Status HostHub::endpointExistsLocked(
+    const EndpointId &id, std::optional<std::string> serviceDescriptor) {
   if (id.hubId != kInfo.hubId) {
     LOGE("Rejecting lookup on unowned endpoint (%" PRId64 ", %" PRId64
          ") from hub %" PRId64,
          id.hubId, id.id, kInfo.hubId);
     return pw::Status::InvalidArgument();
   }
-  if (auto it = mIdToEndpoint.find(id.id); it != mIdToEndpoint.end())
-    return pw::OkStatus();
+  if (auto it = mIdToEndpoint.find(id.id); it != mIdToEndpoint.end()) {
+    if (!serviceDescriptor) return pw::OkStatus();
+    for (const auto &service : it->second.services) {
+      if (service.serviceDescriptor == *serviceDescriptor)
+        return pw::OkStatus();
+    }
+    LOGW("Endpoint (%" PRId64 ", %" PRId64 ") doesn't have service %s",
+         id.hubId, id.id, serviceDescriptor->c_str());
+  }
   return pw::Status::NotFound();
 }
 
@@ -279,6 +309,14 @@ bool HostHub::sessionIdInRangeLocked(uint16_t id) {
     if (id >= range.first && id <= range.second) return true;
   }
   return false;
+}
+
+pw::Status HostHub::checkSessionOpenLocked(uint16_t id) {
+  PW_TRY_ASSIGN(Session * session, getSessionLocked(id));
+  if (!session->mPendingDestination && !session->mPendingMessageRouter)
+    return pw::OkStatus();
+  LOGE("Session %" PRIu16 " is pending", id);
+  return pw::Status::FailedPrecondition();
 }
 
 pw::Result<HostHub::Session *> HostHub::getSessionLocked(uint16_t id) {
@@ -291,30 +329,19 @@ pw::Result<HostHub::Session *> HostHub::getSessionLocked(uint16_t id) {
   return &sessionIt->second;
 }
 
-MessageHubManager::MessageHubManager(HostHubDownCb cb)
-    : mHostHubDownCb(std::move(cb)) {
-  mDeathRecipient = ndk::ScopedAIBinder_DeathRecipient(
-      AIBinder_DeathRecipient_new(onClientDeath));
-  AIBinder_DeathRecipient_setOnUnlinked(
-      mDeathRecipient.get(), /*onUnlinked= */ [](void *cookie) {
-        LOGD("Callback is unlinked. Releasing the death recipient cookie.");
-        delete static_cast<HostHub::DeathRecipientCookie *>(cookie);
-      });
-}
-
 pw::Result<std::shared_ptr<HostHub>> MessageHubManager::createHostHub(
-    std::shared_ptr<IEndpointCallback> callback, const HubInfo &info) {
-  if (info.hubId == kContextHubServiceHubId &&
-      AIBinder_getCallingUid() != kSystemServerUid) {
+    std::shared_ptr<IEndpointCallback> callback, const HubInfo &info, uid_t uid,
+    pid_t pid) {
+  if (info.hubId == kContextHubServiceHubId && uid != kSystemServerUid) {
     LOGE("(pid %" PRId32 ", uid %" PRId32
          ") attempting to impersonate ContextHubService",
-         AIBinder_getCallingPid(), AIBinder_getCallingUid());
+         pid, uid);
     return pw::Status::PermissionDenied();
   }
   std::lock_guard lock(mLock);
   if (mIdToHostHub.count(info.hubId)) return pw::Status::AlreadyExists();
   std::shared_ptr<HostHub> hub(new HostHub(*this, std::move(callback), info));
-  if (!hub->callback()) return pw::Status::Internal();
+  if (!hub->mCallback) return pw::Status::Internal();
   mIdToHostHub.insert({info.hubId, hub});
   LOGI("Registered host hub %" PRId64, info.hubId);
   return hub;
@@ -350,7 +377,7 @@ void MessageHubManager::clearEmbeddedState() {
   std::vector<EndpointId> endpoints;
   for (const auto &[hubId, hub] : mIdToEmbeddedHub) {
     for (const auto &[endpointId, endpoint] : hub.idToEndpoint)
-      endpoints.push_back(endpoint.id);
+      if (endpoint.second) endpoints.push_back(endpoint.first.id);
   }
   mIdToEmbeddedHub.clear();
 
@@ -381,7 +408,7 @@ void MessageHubManager::removeEmbeddedHub(int64_t id) {
   auto it = mIdToEmbeddedHub.find(id);
   if (it == mIdToEmbeddedHub.end()) return;
   for (const auto &[endpointId, info] : it->second.idToEndpoint)
-    endpoints.push_back(info.id);
+    if (info.second) endpoints.push_back(info.first.id);
   mIdToEmbeddedHub.erase(it);
 
   // For each host hub, determine which sessions if any are now closed and send
@@ -414,9 +441,36 @@ void MessageHubManager::addEmbeddedEndpoint(const EndpointInfo &endpoint) {
     return;
   }
   addEmbeddedEndpointLocked(endpoint);
+}
+
+void MessageHubManager::addEmbeddedEndpointService(const EndpointId &endpoint,
+                                                   const Service &service) {
+  std::lock_guard lock(mLock);
+  if (!mIdToEmbeddedHubReady) {
+    LOGW("Skipping embedded endpoint registration before initEmbeddedState()");
+    return;
+  }
+  auto statusOrEndpoint = lookupEmbeddedEndpointLocked(endpoint);
+  if (!statusOrEndpoint.ok()) return;
+  if ((*statusOrEndpoint)->second) {
+    LOGE("Adding service to embedded endpoint after ready");
+    return;
+  }
+  (*statusOrEndpoint)->first.services.push_back(service);
+}
+
+void MessageHubManager::setEmbeddedEndpointReady(const EndpointId &id) {
+  std::lock_guard lock(mLock);
+  if (!mIdToEmbeddedHubReady) {
+    LOGW("Skipping embedded endpoint registration before initEmbeddedState()");
+    return;
+  }
+  auto statusOrEndpoint = lookupEmbeddedEndpointLocked(id);
+  if (!statusOrEndpoint.ok() || (*statusOrEndpoint)->second) return;
+  (*statusOrEndpoint)->second = true;
   for (auto &[hostHubId, hub] : mIdToHostHub) {
     ::android::base::ScopedLockAssertion lockAssertion(hub->mManager.mLock);
-    hub->mCallback->onEndpointStarted({endpoint});
+    hub->mCallback->onEndpointStarted({(*statusOrEndpoint)->first});
   }
 }
 
@@ -425,7 +479,7 @@ std::vector<EndpointInfo> MessageHubManager::getEmbeddedEndpoints() const {
   std::vector<EndpointInfo> endpoints;
   for (const auto &[id, hub] : mIdToEmbeddedHub) {
     for (const auto &[endptId, endptInfo] : hub.idToEndpoint)
-      endpoints.push_back(endptInfo);
+      if (endptInfo.second) endpoints.push_back(endptInfo.first);
   }
   return endpoints;
 }
@@ -453,6 +507,34 @@ void MessageHubManager::removeEmbeddedEndpoint(const EndpointId &id) {
   }
 }
 
+MessageHubManager::RealDeathRecipient::RealDeathRecipient() {
+  mDeathRecipient = ndk::ScopedAIBinder_DeathRecipient(
+      AIBinder_DeathRecipient_new(&MessageHubManager::onClientDeath));
+  AIBinder_DeathRecipient_setOnUnlinked(
+      mDeathRecipient.get(), /*onUnlinked= */ [](void *cookie) {
+        LOGD("Callback is unlinked. Releasing the death recipient cookie.");
+        delete static_cast<HostHub::DeathRecipientCookie *>(cookie);
+      });
+}
+
+pw::Status MessageHubManager::RealDeathRecipient::linkCallback(
+    const std::shared_ptr<IEndpointCallback> &callback,
+    HostHub::DeathRecipientCookie *cookie) {
+  return AIBinder_linkToDeath(callback->asBinder().get(), mDeathRecipient.get(),
+                              cookie) == STATUS_OK
+             ? pw::OkStatus()
+             : pw::Status::Internal();
+}
+
+pw::Status MessageHubManager::RealDeathRecipient::unlinkCallback(
+    const std::shared_ptr<IEndpointCallback> &callback,
+    HostHub::DeathRecipientCookie *cookie) {
+  return AIBinder_unlinkToDeath(callback->asBinder().get(),
+                                mDeathRecipient.get(), cookie) == STATUS_OK
+             ? pw::OkStatus()
+             : pw::Status::NotFound();
+}
+
 void MessageHubManager::onClientDeath(void *cookie) {
   auto *cookieData = reinterpret_cast<HostHub::DeathRecipientCookie *>(cookie);
   LOGW("Process hosting hub %" PRId64 " died", cookieData->hubId);
@@ -476,15 +558,32 @@ void MessageHubManager::addEmbeddedEndpointLocked(
          endpoint.id.hubId, endpoint.id.id);
     return;
   }
-  it->second.idToEndpoint.insert({endpoint.id.id, endpoint});
+  it->second.idToEndpoint.insert({endpoint.id.id, {endpoint, false}});
 }
 
 pw::Status MessageHubManager::embeddedEndpointExistsLocked(
-    const EndpointId &id) {
+    const EndpointId &id, std::optional<std::string> serviceDescriptor) {
+  PW_TRY_ASSIGN(const auto *endpoint, lookupEmbeddedEndpointLocked(id));
+  if (!endpoint->second) {
+    LOGW("Accessing remote endpoint (%" PRId64 ", %" PRId64 ") before ready",
+         id.hubId, id.id);
+    return pw::Status::NotFound();
+  }
+  if (!serviceDescriptor) return pw::OkStatus();
+  for (const auto &service : endpoint->first.services) {
+    if (service.serviceDescriptor == *serviceDescriptor) return pw::OkStatus();
+  }
+  LOGW("Endpoint (%" PRId64 ", %" PRId64 ") doesn't have service %s", id.hubId,
+       id.id, serviceDescriptor->c_str());
+  return pw::Status::NotFound();
+}
+
+pw::Result<std::pair<EndpointInfo, bool> *>
+MessageHubManager::lookupEmbeddedEndpointLocked(const EndpointId &id) {
   auto hubIt = mIdToEmbeddedHub.find(id.hubId);
   if (hubIt != mIdToEmbeddedHub.end()) {
     auto it = hubIt->second.idToEndpoint.find(id.id);
-    if (it != hubIt->second.idToEndpoint.end()) return pw::OkStatus();
+    if (it != hubIt->second.idToEndpoint.end()) return &(it->second);
   }
   LOGW("Could not find remote endpoint (%" PRId64 ", %" PRId64 ")", id.hubId,
        id.id);

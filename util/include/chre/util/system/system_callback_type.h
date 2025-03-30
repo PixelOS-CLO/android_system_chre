@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef CHRE_CORE_EVENT_LOOP_COMMON_H_
-#define CHRE_CORE_EVENT_LOOP_COMMON_H_
+#ifndef CHRE_UTIL_SYSTEM_SYSTEM_CALLBACK_TYPE_H_
+#define CHRE_UTIL_SYSTEM_SYSTEM_CALLBACK_TYPE_H_
 
 #include "chre_api/chre/event.h"
 
@@ -83,6 +83,7 @@ enum class SystemCallbackType : uint16_t {
   BleSocketConnected,
   EndpointCleanupNanoappEvent,
   EndpointSessionRequestedEvent,
+  CycleNanoappWakeupBucket,
 };
 
 //! Deferred/delayed callbacks use the event subsystem but are invariably sent
@@ -94,4 +95,4 @@ using SystemEventCallbackFunction = void(uint16_t type, void *data,
 
 }  // namespace chre
 
-#endif  // CHRE_CORE_EVENT_LOOP_COMMON_H_
+#endif  // CHRE_UTIL_SYSTEM_SYSTEM_CALLBACK_TYPE_H_

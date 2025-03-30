@@ -17,9 +17,9 @@
 #ifndef CHRE_CORE_EVENT_H_
 #define CHRE_CORE_EVENT_H_
 
-#include "chre/core/event_loop_common.h"
 #include "chre/platform/assert.h"
 #include "chre/util/non_copyable.h"
+#include "chre/util/system/system_callback_type.h"
 #include "chre_api/chre/event.h"
 
 #include <cstdint>
@@ -39,7 +39,7 @@ constexpr uint16_t kInvalidInstanceId = kBroadcastInstanceId;
 
 //! Default target group mask that results in the event being sent to any app
 //! registered for it.
-constexpr uint16_t kDefaultTargetGroupMask = UINT16_MAX;
+constexpr uint16_t kDefaultTargetGroupMask = 0;
 
 class Event : public NonCopyable {
  public:
@@ -61,7 +61,6 @@ class Event : public NonCopyable {
         isLowPriority(isLowPriority_) {
     // Sending events to the system must only be done via the other constructor
     CHRE_ASSERT(targetInstanceId_ != kSystemInstanceId);
-    CHRE_ASSERT(targetAppGroupMask_ > 0);
   }
 
   // Alternative constructor used for system-internal events (e.g. deferred
