@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 The Android Open Source Project
+ * Copyright (C) 2025 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,16 +14,23 @@
  * limitations under the License.
  */
 
-#include "exynos_daemon.h"
+#pragma once
 
-int main() {
-  android::chre::ExynosDaemon daemon;
+#include "pw_bluetooth_proxy/proxy_host.h"
 
-  if (!daemon.init()) {
-    LOGE("failed to init the daemon");
-  } else {
-    daemon.run();
+namespace chre {
+
+class PlatformBtSocketResourcesBase {
+ public:
+  PlatformBtSocketResourcesBase(pw::bluetooth::proxy::ProxyHost &proxyHost)
+      : mProxyHost(proxyHost) {}
+
+  pw::bluetooth::proxy::ProxyHost &getProxyHost() {
+    return mProxyHost;
   }
 
-  return 0;
-}
+ private:
+  pw::bluetooth::proxy::ProxyHost &mProxyHost;
+};
+
+}  // namespace chre
