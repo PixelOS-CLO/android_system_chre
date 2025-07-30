@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 The Android Open Source Project
+ * Copyright (C) 2025 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,14 +14,23 @@
  * limitations under the License.
  */
 
-#include "chre/util/nanoapp/callbacks.h"
+#include "gtest/gtest.h"
 
-#include "chre_api/chre.h"
+#include "chre/util/default_container_allocator.h"
+
+#include "pw_allocator/layout.h"
+
+using ::pw::allocator::Layout;
 
 namespace chre {
+namespace {
 
-void heapFreeMessageCallback(void *message, size_t /* messageSize */) {
-  chreHeapFree(message);
+TEST(DefaultContainerAllocatorTest, TestAllocate) {
+  DefaultContainerAllocator allocator;
+  void *ptr = allocator.Allocate(Layout(10));
+  EXPECT_NE(ptr, nullptr);
+  allocator.Deallocate(ptr);
 }
 
+}  // namespace
 }  // namespace chre
