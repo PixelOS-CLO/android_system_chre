@@ -16,23 +16,32 @@
 
 #pragma once
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 
+#include "pw_bytes/span.h"
 #include "pw_function/function.h"
 #include "pw_span/span.h"
 
 namespace chre::shmem_spmc_queue {
 
 /** Sends a notification to an endpoint within the same "process". */
-using LocalNotifyFn = pw::InlineFunction<void(void), 8>;
+using LocalNotifyFn = void (*)(void *context);
+
+/** Arguments passed to endpoints on a queue using local notifications. */
+struct LocalNotifyArgs {
+  LocalNotifyFn fn;
+  void *ctx;
+};
 
 /** Sends an out-of-band notification to an endpoint described by id. */
-using RemoteNotifyFn = pw::Function<void(pw::span<const uint8_t, 16> id)>;
+using RemoteNotifyFn = pw::Function<void(pw::ConstByteSpan id)>;
 
 /** Arguments passed to endpoints on a queue using out-of-band notifications. */
 struct RemoteNotifyArgs {
   RemoteNotifyFn fn;
-  uint8_t id[16];  // Used to route notifications to this endpoint.
+  std::array<std::byte, 16> id;
 };
 
 /** Notification policies a consumer can set. */
@@ -51,17 +60,5 @@ enum class OverwritePolicy : uint8_t {
   kDisallowed = 0x1 << 4,  // Producer may not overwrite the Consumer.
   kMask = 0xf << 4,        // Mask for extracting overwrite policy bits.
 };
-
-/** Opaque struct representing a Consumer's policies. */
-// TODO(b/445495673): Make nicer user-facing Consumer policy class.
-struct ConsumerPolicy;
-ConsumerPolicy getNoNotifyPolicy(OverwritePolicy overwrite_policy);
-ConsumerPolicy getOpportunisticPolicy(size_t low_watermark,
-                                      OverwritePolicy overwrite_policy);
-ConsumerPolicy getHighWaterMark(size_t high_watermark,
-                                OverwritePolicy overwrite_policy);
-ConsumerPolicy getPeriodic(uint32_t period_ms,
-                           OverwritePolicy overwrite_policy);
-ConsumerPolicy getStreaming(OverwritePolicy overwrite_policy);
 
 }  // namespace chre::shmem_spmc_queue

@@ -23,6 +23,7 @@
 #include "chre/core/event.h"
 #include "chre/core/event_loop_manager.h"
 #include "chre/core/nanoapp.h"
+#include "chre/core/static_nanoapps.h"
 #include "chre/platform/assert.h"
 #include "chre/platform/context.h"
 #include "chre/platform/event_loop_hooks.h"
@@ -37,6 +38,7 @@
 #include "chre/util/throttle.h"
 #include "chre/util/time.h"
 #include "chre_api/chre/version.h"
+#include "pw_span/span.h"
 
 using ::chre::message::EndpointInfo;
 using ::chre::message::EndpointType;
@@ -157,7 +159,7 @@ void EventLoop::run() {
     // queue mEvents (potentially posted from another thread), then within
     // this context these events are distributed to all interested Nanoapps,
     // with their free callback invoked after distribution.
-    mEventPoolUsage.addValue(static_cast<uint32_t>(mEvents.size()));
+    mEventQueueUsage.addValue(static_cast<uint32_t>(mEvents.size()));
 
     // mEvents.pop() will be a blocking call if mEvents.empty()
     Event *event = mEvents.pop();
@@ -314,8 +316,8 @@ bool EventLoop::removeNonNanoappLowPriorityEventsFromBack(
 }
 
 bool EventLoop::hasNoSpaceForHighPriorityEvent() {
-  return mEventPool.full() && !removeNonNanoappLowPriorityEventsFromBack(
-                                  targetLowPriorityEventRemove);
+  return mEvents.full() && !removeNonNanoappLowPriorityEventsFromBack(
+                               targetLowPriorityEventRemove);
 }
 
 bool EventLoop::distributeEventSync(uint16_t eventType, void *eventData,
@@ -330,81 +332,65 @@ bool EventLoop::distributeEventSync(uint16_t eventType, void *eventData,
   return distributeEventCommon(&event);
 }
 
-// TODO(b/264108686): Refactor this function and postSystemEvent
+// TODO(b/435246073): Remove once migrated to new EventLoopManager APIs
 void EventLoop::postEventOrDie(uint16_t eventType, void *eventData,
                                chreEventCompleteFunction *freeCallback,
                                uint16_t targetInstanceId,
                                uint16_t targetGroupMask) {
-  if (mRunning) {
-    if (hasNoSpaceForHighPriorityEvent() ||
-        !allocateAndPostEvent(eventType, eventData, freeCallback,
-                              /* isLowPriority= */ false, kSystemInstanceId,
-                              targetInstanceId, targetGroupMask)) {
-      CHRE_HANDLE_FAILED_SYSTEM_EVENT_ENQUEUE(
-          this, eventType, eventData, freeCallback, kSystemInstanceId,
-          targetInstanceId, targetGroupMask);
-      FATAL_ERROR("Failed to post critical system event 0x%" PRIx16, eventType);
-    }
-  } else if (freeCallback != nullptr) {
-    freeCallback(eventType, eventData);
-  }
+  EventLoopManagerSingleton::get()->postEventOrDie(
+      eventType, eventData, freeCallback, targetInstanceId, targetGroupMask);
 }
 
 bool EventLoop::postSystemEvent(uint16_t eventType, void *eventData,
                                 SystemEventCallbackFunction *callback,
                                 void *extraData) {
-  if (!mRunning) {
-    return false;
-  }
-
-  if (hasNoSpaceForHighPriorityEvent()) {
-    CHRE_HANDLE_EVENT_QUEUE_FULL_DURING_SYSTEM_POST(this, eventType, eventData,
-                                                    callback, extraData);
-    FATAL_ERROR("Failed to post critical system event 0x%" PRIx16
-                ": Full of high priority "
-                "events",
-                eventType);
-  }
-
-  Event *event = mEventPool.allocate(eventType, eventData, callback, extraData);
-  if (event == nullptr || !mEvents.push(event)) {
-    CHRE_HANDLE_FAILED_SYSTEM_EVENT_ENQUEUE(
-        this, eventType, eventData, callback, kSystemInstanceId,
-        kBroadcastInstanceId, kDefaultTargetGroupMask);
-    FATAL_ERROR("Failed to post critical system event 0x%" PRIx16
-                ": out of memory",
-                eventType);
-  }
-
-  return true;
+  return EventLoopManagerSingleton::get()->postSystemEvent(eventType, eventData,
+                                                           callback, extraData);
 }
-
 bool EventLoop::postLowPriorityEventOrFree(
     uint16_t eventType, void *eventData,
     chreEventCompleteFunction *freeCallback, uint16_t senderInstanceId,
     uint16_t targetInstanceId, uint16_t targetGroupMask) {
-  bool eventPosted = false;
+  return EventLoopManagerSingleton::get()->postLowPriorityEventOrFree(
+      eventType, eventData, freeCallback, senderInstanceId, targetInstanceId,
+      targetGroupMask);
+}
 
-  if (mRunning) {
-    eventPosted =
-        allocateAndPostEvent(eventType, eventData, freeCallback,
-                             /* isLowPriority= */ true, senderInstanceId,
-                             targetInstanceId, targetGroupMask);
-    if (!eventPosted) {
-      LOGE("Failed to allocate event 0x%" PRIx16 " to instanceId %" PRIu16,
-           eventType, targetInstanceId);
+bool EventLoop::postEvent(Event *event) {
+  if (!mRunning) {
+    return false;
+  }
+
+  if (event != nullptr && !event->isLowPriority &&
+      hasNoSpaceForHighPriorityEvent()) {
+    CHRE_HANDLE_EVENT_QUEUE_FULL_DURING_SYSTEM_POST(
+        this, event->eventType, event->eventData, event->callback,
+        event->extraData);
+    FATAL_ERROR("Failed to post critical system event 0x%" PRIx16
+                ": Full of high priority "
+                "events",
+                event->eventType);
+  }
+
+  bool success = (event != nullptr) && mEvents.push(event);
+  if (!success) {
+    if (!event->isLowPriority) {
+      CHRE_HANDLE_FAILED_SYSTEM_EVENT_ENQUEUE(
+          this, event->eventType, event->eventData, event->callback,
+          event->senderInstanceId, event->targetInstanceId,
+          event->targetGroupMask);
+      FATAL_ERROR("Failed to post critical system event 0x%" PRIx16
+                  ": out of memory",
+                  event->eventType);
+    } else {
       CHRE_HANDLE_LOW_PRIORITY_ENQUEUE_FAILURE(
-          this, eventType, eventData, freeCallback, senderInstanceId,
-          targetInstanceId, targetGroupMask);
+          this, event->eventType, event->eventData, event->freeCallback,
+          event->senderInstanceId, event->targetInstanceId,
+          event->targetGroupMask);
       ++mNumDroppedLowPriEvents;
     }
   }
-
-  if (!eventPosted && freeCallback != nullptr) {
-    freeCallback(eventType, eventData);
-  }
-
-  return eventPosted;
+  return success;
 }
 
 void EventLoop::stop() {
@@ -414,8 +400,9 @@ void EventLoop::stop() {
   };
 
   // Stop accepting new events and tell the main loop to finish
-  postSystemEvent(static_cast<uint16_t>(SystemCallbackType::Shutdown),
-                  /*eventData=*/this, callback, /*extraData=*/nullptr);
+  EventLoopManagerSingleton::get()->postSystemEvent(
+      static_cast<uint16_t>(SystemCallbackType::Shutdown),
+      /*eventData=*/this, callback, /*extraData=*/nullptr);
 }
 
 void EventLoop::onStopComplete() {
@@ -453,7 +440,7 @@ bool EventLoop::currentNanoappIsStopping() const {
 void EventLoop::logStateToBuffer(DebugDumpWrapper &debugDump) const {
   debugDump.print("\nEvent Loop:\n");
   debugDump.print("  Max event pool usage: %" PRIu32 "/%zu\n",
-                  mEventPoolUsage.getMax(), kMaxEventCount);
+                  mEventQueueUsage.getMax(), kMaxEventCount);
   debugDump.print("  Number of low priority events dropped: %" PRIu32 "\n",
                   mNumDroppedLowPriEvents);
 
@@ -543,30 +530,6 @@ void EventLoop::loadStaticNanoapps(
     UniquePtr<Nanoapp> nanoapp = initFunc();
     startNanoapp(std::move(nanoapp));
   }
-}
-
-bool EventLoop::allocateAndPostEvent(uint16_t eventType, void *eventData,
-                                     chreEventCompleteFunction *freeCallback,
-                                     bool isLowPriority,
-                                     uint16_t senderInstanceId,
-                                     uint16_t targetInstanceId,
-                                     uint16_t targetGroupMask) {
-  bool success = false;
-
-  Event *event =
-      mEventPool.allocate(eventType, eventData, freeCallback, isLowPriority,
-                          senderInstanceId, targetInstanceId, targetGroupMask);
-  if (event != nullptr) {
-    success = mEvents.push(event);
-  }
-  if (!success) {
-    LOG_OOM();
-    if (event != nullptr) {
-      mEventPool.deallocate(event);
-    }
-  }
-
-  return success;
 }
 
 void EventLoop::deliverNextEvent(const UniquePtr<Nanoapp> &app, Event *event) {
@@ -662,7 +625,7 @@ void EventLoop::freeEvent(Event *event) {
       mCurrentApp = nullptr;
     }
   }
-  mEventPool.deallocate(event);
+  EventLoopManagerSingleton::get()->deallocateEvent(event);
 }
 
 Nanoapp *EventLoop::lookupAppByAppId(uint64_t appId) const {
@@ -699,7 +662,8 @@ void EventLoop::notifyAppStatusChange(uint16_t eventType,
     info->version = nanoapp.getAppVersion();
     info->instanceId = nanoapp.getInstanceId();
 
-    postEventOrDie(eventType, info, freeEventDataCallback);
+    EventLoopManagerSingleton::get()->postEventOrDie(eventType, info,
+                                                     freeEventDataCallback);
   }
 }
 
