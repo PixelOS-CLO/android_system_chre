@@ -21,7 +21,6 @@
 #include "chre/core/ble_l2cap_coc_socket_data.h"
 #include "chre/platform/platform_bt_socket.h"
 #include "chre/platform/platform_bt_socket_resources.h"
-#include "chre/util/fixed_size_vector.h"
 #include "chre/util/memory_pool.h"
 #include "chre_api/chre.h"
 
@@ -40,14 +39,18 @@ class BleSocketManager : public NonCopyable {
       : mPlatformBtSocketResources(std::forward<Args>(args)...) {}
 
   /**
-   * Creates a PlatformBtSocket and notifies the nanoapp that a BLE socket has
-   * been connected and is ready to be used.
+   * Handles a request from the Host to get CHRE's BLE socket capabilities.
+   */
+  void handleSocketCapabilitiesRequestByHost();
+
+  /**
+   * Handles a socket open request from the host. Switches the context to the
+   * event loop thread before processing the socket open request with
+   * handleSocketOpenedByHostSync.
    *
    * @param socketData Metadata for the BLE socket.
-   * @return chreError Result of whether the socket was created successfully and
-   * whether the nanoapp has accepted it.
    */
-  chreError socketConnected(const BleL2capCocSocketData &socketData);
+  void handleSocketOpenedByHost(const BleL2capCocSocketData &socketData);
 
   /**
    * Callback a nanoapp uses to accept the socket. This will be used in the
@@ -65,7 +68,78 @@ class BleSocketManager : public NonCopyable {
                               uint16_t length,
                               chreBleSocketPacketFreeFunction *freeCallback);
 
+  /**
+   * Handles a request to free the socket packet from the platform. Switches the
+   * context to the event loop thread before freeing the socket packet.
+   *
+   * @param data Socket packet to be freed.
+   * @param length Length of socket packet.
+   * @param freeCallback @see chreBleSocketPacketFreeFunction
+   */
+  void freeSocketPacket(void *data, uint16_t length,
+                        chreBleSocketPacketFreeFunction *freeCallback);
+
+  /**
+   * Handles a socket event originating from the platform. Switches the context
+   * to the event loop thread before processing the event with
+   * handlePlatformSocketEventSync.
+   *
+   * @param socketId Identifies socket which the event is for.
+   * @param socketEvent Socket event to be processed.
+   */
+  void handlePlatformSocketEvent(uint64_t socketId, SocketEvent socketEvent);
+
+  /**
+   * Handles a socket packet from the platform. Switches the context to the
+   * event loop thread before processing the event with
+   * handlePlatformSocketPacketSync.
+   *
+   * @param socketId ID of the socket sending the packet.
+   * @param data Socket packet data.
+   * @param length Socket packet data length.
+   */
+  void handlePlatformSocketPacket(uint64_t socketId, const uint8_t *data,
+                                  uint16_t length);
+
+  /**
+   * Closes the sockets belonging to a nanoapp when it is unloaded.
+   *
+   * @param nanoappInstanceId Nanoapp being unloaded.
+   * @return number of sockets closed.
+   */
+  uint32_t closeSocketsOnNanoappUnload(uint16_t nanoappInstanceId);
+
+  /**
+   * Handles the host closing the socket. Switches the context to the event loop
+   * thread before processing the socket close request with
+   * handleSocketClosedByHostSync.
+   *
+   * @param socketId Socket ID to be closed.
+   */
+  void handleSocketClosedByHost(uint64_t socketId);
+
  private:
+  /**
+   * @see handleSocketOpenedByHost
+   */
+  void handleSocketOpenedByHostSync(const BleL2capCocSocketData &socketData);
+
+  /**
+   * @see handlePlatformSocketEvent
+   */
+  void handlePlatformSocketEventSync(uint64_t socketId,
+                                     SocketEvent socketEvent);
+
+  /**
+   * @see handlePlatformSocketPacket
+   */
+  void handlePlatformSocketPacketSync(chreBleSocketPacketEvent *event);
+
+  /**
+   * @see handleSocketClosedByHost
+   */
+  void handleSocketClosedByHostSync(uint64_t socketId);
+
   static constexpr uint8_t kMaxNumSockets = 3;
 
   /**
@@ -82,6 +156,15 @@ class BleSocketManager : public NonCopyable {
    * Platform resources used for creating a new BT socket.
    */
   PlatformBtSocketResources mPlatformBtSocketResources;
+
+  PlatformBtSocket *findPlatformBtSocket(uint64_t socketId) {
+    return mBtSockets.find(
+        [](PlatformBtSocket *btSocket, void *data) {
+          uint64_t socketId = *(static_cast<uint64_t *>(data));
+          return (btSocket->getId() == socketId);
+        },
+        &socketId);
+  }
 };
 
 }  // namespace chre

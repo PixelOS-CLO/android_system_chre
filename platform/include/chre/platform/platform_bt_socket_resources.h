@@ -27,6 +27,8 @@ class PlatformBtSocketResources : public PlatformBtSocketResourcesBase {
   template <typename... Args>
   PlatformBtSocketResources(Args &&...args)
       : PlatformBtSocketResourcesBase(std::forward<Args>(args)...) {}
+
+  uint32_t getLeCocMtu();
 };
 
 }  // namespace chre

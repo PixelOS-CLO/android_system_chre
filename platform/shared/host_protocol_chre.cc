@@ -243,7 +243,6 @@ bool HostProtocolChre::decodeMessageFromHost(const void *message,
                       static_cast<uint64_t>(btSocketOpen->endpointId()),
                   .connectionHandle = static_cast<uint16_t>(
                       btSocketOpen->aclConnectionHandle()),
-                  .hostClientId = hostClientId,
                   .rxConfig =
                       L2capCocConfig{.cid = static_cast<uint16_t>(
                                          leCocChannelInfo->localCid()),
@@ -281,6 +280,8 @@ bool HostProtocolChre::decodeMessageFromHost(const void *message,
                 container->message());
         LOGD("Received BT Socket close response for socketId=%" PRIu64,
              btSocketCloseResponse->socketId());
+        HostMessageHandlers::handleBtSocketClosed(
+            btSocketCloseResponse->socketId());
         success = true;
         break;
       }
@@ -582,8 +583,8 @@ void HostProtocolChre::encodeNanConfigurationRequest(
 }
 
 void HostProtocolChre::encodeBtSocketOpenResponse(
-    ChreFlatBufferBuilder &builder, uint16_t hostClientId, uint64_t socketId,
-    bool success, const char *reason) {
+    ChreFlatBufferBuilder &builder, uint64_t socketId, bool success,
+    const char *reason) {
   auto reasonOffset = addStringAsByteVector(builder, reason);
   auto socketOpenResponse = fbs::CreateBtSocketOpenResponse(
       builder, socketId,
@@ -591,17 +592,15 @@ void HostProtocolChre::encodeBtSocketOpenResponse(
               : fbs::BtSocketOpenStatus::FAILURE,
       reasonOffset);
   finalize(builder, fbs::ChreMessage::BtSocketOpenResponse,
-           socketOpenResponse.Union(), hostClientId);
+           socketOpenResponse.Union());
 }
 
 void HostProtocolChre::encodeBtSocketClose(ChreFlatBufferBuilder &builder,
-                                           uint16_t hostClientId,
                                            uint64_t socketId,
                                            const char *reason) {
   auto reasonOffset = addStringAsByteVector(builder, reason);
   auto socketClose = fbs::CreateBtSocketClose(builder, socketId, reasonOffset);
-  finalize(builder, fbs::ChreMessage::BtSocketClose, socketClose.Union(),
-           hostClientId);
+  finalize(builder, fbs::ChreMessage::BtSocketClose, socketClose.Union());
 }
 
 void HostProtocolChre::encodeBtSocketGetCapabilitiesResponse(

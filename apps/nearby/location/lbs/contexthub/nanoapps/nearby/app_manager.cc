@@ -217,6 +217,8 @@ void AppManager::UpdateBleScanState() {
     ble_scanner_.Restart();
   } else {
     ble_scanner_.Stop();
+    // Clear the advertise report cache when the scan is stopped.
+    adv_reports_cache_.Clear();
   }
 }
 
@@ -518,6 +520,7 @@ bool AppManager::HandleExtFilterConfig(
   chre::DynamicVector<chreBleGenericFilter> generic_filters;
 
   filter_extension_.Update(host_info, config, &generic_filters,
+                           &screen_on_filter_extension_results_,
                            config_response);
   if (config_response->result != CHREX_NEARBY_RESULT_OK) {
     return false;

@@ -20,7 +20,9 @@
 #include <cstdint>
 
 #include "chre/core/ble_l2cap_coc_socket_data.h"
+#include "chre/platform/mutex.h"
 #include "chre/platform/platform_bt_socket_resources.h"
+#include "chre/util/array_queue.h"
 #include "chre/util/unique_ptr.h"
 
 #include "pw_allocator/first_fit.h"
@@ -45,32 +47,40 @@ class PlatformBtSocketBase {
    * Callback to be invoked on Rx SDUs.
    *
    * @see pw::bluetooth::proxy::ProxyHost::AcquireL2capCoc()
+   *
+   * NOTE: this callback will not be invoked from the CHRE thread. It is
+   * expected that the caller invokes DramVoteClient::incrementDramVoteCount()
+   * and DramVoteClient::decrementDramVoteCount() around use of this function.
    */
-  void handleSocketData(pw::multibuf::MultiBuf &&) {
-    // TODO(b/392139857): Implement receiving data from the BT offload socket
-  }
+  void handleRxSocketPacket(pw::multibuf::MultiBuf &&payload);
 
   /**
-   * Callback to handle asynchronous socket events such as errors and flow
-   * control events encountered by the channel.
+   * Callback to be invoked when a socket event is received.
    *
    * @see pw::bluetooth::proxy::ProxyHost::AcquireL2capCoc()
+   *
+   * NOTE: this callback will not be invoked from the CHRE thread. It is
+   * expected that the caller invokes DramVoteClient::incrementDramVoteCount()
+   * and DramVoteClient::decrementDramVoteCount() around use of this function.
    */
-  void handleSocketEvent(pw::bluetooth::proxy::L2capChannelEvent) {
-    // TODO(b/392139852): Handle write complete event and send
-    // CHRE_EVENT_BLE_SOCKET_SEND_AVAILABLE event to nanaopp
-
-    // TODO(b/393485847): Handle socket closures
-  }
+  void handleSocketEvent(pw::bluetooth::proxy::L2capChannelEvent event);
 
  protected:
+  uint64_t mId;
+
   // Multibuf Rx allocators
 
-  static constexpr size_t kRxMultiBufAreaSize = 2 * 1024;
+  static constexpr uint8_t kMaxRxMultibufs = 10;
 
-  static constexpr size_t kRxMultiBufMetaDataSize = 256;
+  static constexpr uint16_t kRxMultiBufAreaSize = 2048;
 
-  static constexpr size_t kTxMultiBufMetaDataSize = 256;
+  static constexpr uint16_t kRxMultiBufMetaDataSize = 1024;
+
+  // TODO(b/430672746): This is 5 * the metadata needed for a single multibuf
+  // based on the hard coded tx queue size for a pigweed L2capChannel. When the
+  // queue size becomes configurable (or multibuf metadata size is reduced),
+  // consider making this value smaller.
+  static constexpr uint16_t kTxMultiBufMetaDataSize = 5 * 256;
 
   std::array<std::byte, kRxMultiBufAreaSize> mRxMultibufArea{};
 
@@ -79,12 +89,24 @@ class PlatformBtSocketBase {
   pw::allocator::FirstFitAllocator<pw::allocator::FirstFitBlock<uintptr_t>>
       mRxFirstFitAllocator{mRxMultibufMetaData};
 
-  pw::allocator::SynchronizedAllocator<pw::sync::Mutex> mSyncAllocator{
+  pw::allocator::SynchronizedAllocator<pw::sync::Mutex> mRxSyncAllocator{
       mRxFirstFitAllocator};
 
   // Allocator used for Rx data received from the BT socket.
-  pw::multibuf::SimpleAllocator mSimpleAllocator{mRxMultibufArea,
-                                                 mSyncAllocator};
+  pw::multibuf::SimpleAllocator mRxSimpleAllocator{mRxMultibufArea,
+                                                   mRxSyncAllocator};
+
+  /**
+   * Tracks packets received from the socket. Stores a packet MultiBuf until the
+   * nanoapp has received the packet. Destroying the MultiBuf before this can
+   * result in loss of the socket packet data.
+   *
+   * NOTE: Initialization order is important. Rx socket packet MultiBufs should
+   * be destroyed before destroying Rx allocator.
+   */
+  ArrayQueue<pw::multibuf::MultiBuf, kMaxRxMultibufs> mRxSocketPackets;
+
+  Mutex mRxSocketPacketsMutex;
 
   // PW L2CAP COC utility used for interacting with the BT socket.
   std::optional<pw::bluetooth::proxy::L2capCoc> mL2capCoc;

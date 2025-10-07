@@ -26,6 +26,11 @@
 
 namespace chre {
 
+enum class SocketEvent : uint8_t {
+  SEND_AVAILABLE,
+  SOCKET_CLOSURE_REQUEST,
+};
+
 /**
  * Defines the common interface to BT socket functionality that is implemented
  * in a platform-specific way, and must be supported on every platform.
@@ -34,10 +39,9 @@ class PlatformBtSocket : public PlatformBtSocketBase {
  public:
   PlatformBtSocket(const BleL2capCocSocketData &socketData,
                    PlatformBtSocketResources &platformBtSocketResources)
-      : PlatformBtSocketBase(socketData, platformBtSocketResources),
-        mId(socketData.socketId),
-        mEndpointId(socketData.endpointId),
-        mHostClientId(socketData.hostClientId) {}
+      : PlatformBtSocketBase(socketData, platformBtSocketResources) {}
+
+  ~PlatformBtSocket();
 
   // Delete the copy constructor
   PlatformBtSocket(const PlatformBtSocket &) = delete;
@@ -52,16 +56,14 @@ class PlatformBtSocket : public PlatformBtSocketBase {
     return mSocketAccepted;
   }
 
-  uint16_t getHostClientId() {
-    return mHostClientId;
+  uint64_t getId();
+
+  uint16_t getNanoappInstanceId() {
+    return mInstanceId;
   }
 
-  uint64_t getId() {
-    return mId;
-  }
-
-  uint64_t getEndpointId() {
-    return mEndpointId;
+  void setNanoappInstanceId(uint16_t instanceId) {
+    mInstanceId = instanceId;
   }
 
   bool isInitialized();
@@ -74,10 +76,14 @@ class PlatformBtSocket : public PlatformBtSocketBase {
   int32_t sendSocketPacket(const void *data, uint16_t length,
                            chreBleSocketPacketFreeFunction *freeCallback);
 
+  // Frees a socket packet after it has been received by the nanoapp.
+  void freeReceivedSocketPacket();
+
  private:
-  uint64_t mId;
-  uint64_t mEndpointId;
-  uint16_t mHostClientId;
+  // Nanoapp instance ID.
+  uint16_t mInstanceId = 0;
+
+  // Whether the nanoapp accepted the socket.
   bool mSocketAccepted = false;
 };
 

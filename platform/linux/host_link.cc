@@ -15,7 +15,9 @@
  */
 
 #include "chre/platform/host_link.h"
+
 #include "chre/core/event_loop_manager.h"
+#include "chre/platform/linux/pal_ble.h"
 
 namespace chre {
 
@@ -35,6 +37,28 @@ bool HostLink::sendMessageDeliveryStatus(uint32_t /* messageSequenceNumber */,
                                          uint8_t /* errorCode */) {
   // Just drop the message delivery status since we do not have a
   // real host to send the status
+  return true;
+}
+
+bool HostLink::sendBtSocketGetCapabilitiesResponse(
+    uint32_t leCocNumberOfSupportedSockets, uint32_t leCocMtu,
+    uint32_t rfcommNumberOfSupportedSockets, uint32_t rfcommMaxFrameSize) {
+  setSocketCapabilities(
+      BtSocketCapabilities{leCocNumberOfSupportedSockets, leCocMtu,
+                           rfcommNumberOfSupportedSockets, rfcommMaxFrameSize});
+  return true;
+}
+
+bool HostLink::sendBtSocketOpenResponse(uint64_t /*socketId*/, bool success,
+                                        const char *reason) {
+  setSocketOpenSuccess(success);
+  setSocketOpenFailureReason(reason);
+  return true;
+}
+
+bool HostLink::sendBtSocketClose(uint64_t /*socketId*/,
+                                 const char * /*reason*/) {
+  incrementSocketClosureCount();
   return true;
 }
 

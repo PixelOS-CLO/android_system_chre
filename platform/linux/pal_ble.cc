@@ -21,6 +21,7 @@
 #include "chre/platform/linux/task_util/task_manager.h"
 #include "chre/util/memory.h"
 #include "chre/util/unique_ptr.h"
+#include "include/chre/platform/linux/pal_ble.h"
 
 #include <chrono>
 #include <optional>
@@ -38,6 +39,10 @@ const struct chrePalBleCallbacks *gCallbacks = nullptr;
 
 bool gBleEnabled = false;
 bool gDelayScanStart = false;
+uint32_t gSocketClosureCount = 0;
+bool gSocketOpenSuccess = false;
+const char *gSocketOpenFailureReason = nullptr;
+chre::BtSocketCapabilities gSocketCapabilities{0, 0, 0, 0};
 
 std::mutex gBatchMutex;
 std::vector<struct chreBleAdvertisementEvent *> gBatchedAdEvents;
@@ -240,18 +245,6 @@ bool chrePalBleApiOpen(const struct chrePalSystemApi *systemApi,
 
 }  // anonymous namespace
 
-bool chrePalIsBleEnabled() {
-  return gBleEnabled;
-}
-
-void delayBleScanStart(bool delay) {
-  gDelayScanStart = delay;
-}
-
-bool startBleScan() {
-  return startScan();
-}
-
 const struct chrePalBleApi *chrePalBleGetApi(uint32_t requestedApiVersion) {
   static const struct chrePalBleApi kApi = {
       .moduleVersion = CHRE_PAL_BLE_API_CURRENT_VERSION,
@@ -273,3 +266,58 @@ const struct chrePalBleApi *chrePalBleGetApi(uint32_t requestedApiVersion) {
     return &kApi;
   }
 }
+
+namespace chre {
+
+bool chrePalIsBleEnabled() {
+  return gBleEnabled;
+}
+
+void delayBleScanStart(bool delay) {
+  gDelayScanStart = delay;
+}
+
+bool startBleScan() {
+  return startScan();
+}
+
+void resetSocketVariables() {
+  gSocketClosureCount = 0;
+  gSocketOpenSuccess = false;
+  gSocketOpenFailureReason = nullptr;
+  gSocketCapabilities = {0, 0, 0, 0};
+}
+
+void incrementSocketClosureCount() {
+  gSocketClosureCount++;
+}
+
+uint32_t getSocketClosureCount() {
+  return gSocketClosureCount;
+}
+
+void setSocketOpenSuccess(bool success) {
+  gSocketOpenSuccess = success;
+}
+
+bool getSocketOpenSuccess() {
+  return gSocketOpenSuccess;
+}
+
+void setSocketOpenFailureReason(const char *reason) {
+  gSocketOpenFailureReason = reason;
+}
+
+const char *getSocketOpenFailureReason() {
+  return gSocketOpenFailureReason;
+}
+
+void setSocketCapabilities(BtSocketCapabilities capabilities) {
+  gSocketCapabilities = capabilities;
+}
+
+BtSocketCapabilities getSocketCapabilities() {
+  return gSocketCapabilities;
+}
+
+}  // namespace chre
