@@ -28,7 +28,6 @@
 #include "pw_allocator/layout.h"
 #include "pw_bytes/span.h"
 #include "pw_result/result.h"
-#include "pw_span/cast.h"
 #include "pw_span/span.h"
 #include "pw_status/status.h"
 #include "pw_status/try.h"
@@ -138,7 +137,7 @@ class ConsumerManager {
   pw::Status removeConsumer(void *queue, uint32_t offset);
 
  protected:
-  friend class ProducerBase;
+  friend class internal::ProducerBase;
   friend class DataNotifier;
 
   /**
@@ -147,15 +146,21 @@ class ConsumerManager {
    * This is used by the Producer and DataNotifier instances to access Consumer
    * state.
    *
-   * fn has the signature: void(ConsumerDesc &desc, Args... args).
+   * fn has the signature:
+   * void(ConsumerDesc &desc, uint32_t producerFlags, Args... args).
+   *
+   * The producerFlags value is provided to avoid an extra atomic operation.
    */
   template <typename Fn, typename... Args>
-  void forAllConsumers(internal::Queue &queue, const Fn &fn, Args... args) {
+  void forAllConsumers(internal::Queue &queue, uint16_t excludeMask,
+                       const Fn &fn, Args... args) {
     uint32_t *descOffsetPtr = &queue.dynamicConsumersHeadOffset;
     auto *desc = internal::fromOffset<internal::ConsumerDesc>(
         kShmemBase, kShmemSize, *descOffsetPtr);
     while (desc) {
-      if (static_cast<uint16_t>(desc->consumerFlags.load()) ==
+      auto consumerFlags = desc->consumerFlags.load();
+      auto producerFlags = desc->producerFlags.load();
+      if (static_cast<uint16_t>(consumerFlags) ==
           static_cast<uint16_t>(internal::ConsumerFlags::kFinished)) {
         // Remove a dynamic Consumer that has marked itself for removal.
         *descOffsetPtr = desc->nextConsumerOffset;
@@ -163,7 +168,11 @@ class ConsumerManager {
         desc = internal::fromOffset<internal::ConsumerDesc>(
             kShmemBase, kShmemSize, *descOffsetPtr);
       } else {
-        fn(*desc, args...);
+        // NOTE: producerFlag and consumerFlags are cached and passed in to
+        // avoid an unnecessary load(). fn() may reload them if required.
+        if (!isFlagInMask(*desc, producerFlags, consumerFlags, excludeMask)) {
+          fn(*desc, producerFlags, args...);
+        }
         descOffsetPtr = &desc->nextConsumerOffset;
         desc = internal::fromOffset<internal::ConsumerDesc>(
             kShmemBase, kShmemSize, *descOffsetPtr);
@@ -171,6 +180,20 @@ class ConsumerManager {
     }
     // TODO(b/445479433): Add support for static Consumers.
   }
+
+  /**
+   * Checks if the Consumer is in a state in the mask.
+   *
+   * Also unsets flags if the consumer has acked them.
+   *
+   * @param desc ConsumerDesc.
+   * @param producerFlags desc.producerFlags.load().
+   * @param consumerFlags desc.consumerFlags.load().
+   * @param producerMask The mask of ProducerFlag values to check for.
+   * @return true iff the consumer is in the state.
+   */
+  bool isFlagInMask(internal::ConsumerDesc &desc, uint32_t producerFlags,
+                    uint32_t consumerFlags, uint16_t producerMask);
 
   uintptr_t kShmemBase;
   internal::Queue *mQueue;
@@ -308,8 +331,8 @@ class Producer : protected internal::ProducerBase {
     auto base = reinterpret_cast<uintptr_t>(shmemBase);
     auto blockLayout = internal::blockLayout<ElementType>(blockCapacity);
     PW_TRY(Base::initialize(base, shmemSize, queuePtr, allocator, blockLayout,
-                            maxBlockCount, minBlockCount,
-                            {.localNotify = notifyArgs}));
+                            blockCapacity * sizeof(ElementType), maxBlockCount,
+                            minBlockCount, {.localNotify = notifyArgs}));
     return Producer(base, shmemSize, *queuePtr, allocator, blockLayout,
                     maxBlockCount, minBlockCount, dataNotifier, consumerManager,
                     /*remoteNotifyFn=*/{}, memAccess);
@@ -336,8 +359,8 @@ class Producer : protected internal::ProducerBase {
     auto base = reinterpret_cast<uintptr_t>(shmemBase);
     auto blockLayout = internal::blockLayout<ElementType>(blockCapacity);
     PW_TRY(Base::initialize(base, shmemSize, queuePtr, allocator, blockLayout,
-                            maxBlockCount, minBlockCount,
-                            {.remoteId = notifyArgs.id}));
+                            blockCapacity * sizeof(ElementType), maxBlockCount,
+                            minBlockCount, {.remoteId = notifyArgs.id}));
     return Producer(base, shmemSize, *queuePtr, allocator, blockLayout,
                     maxBlockCount, minBlockCount, dataNotifier, consumerManager,
                     std::move(notifyArgs.fn), memAccess);
@@ -379,7 +402,9 @@ class Producer : protected internal::ProducerBase {
   pw::Result<pw::span<ElementType>> reserve(size_t count) {
     PW_TRY_ASSIGN(pw::ByteSpan reservation,
                   Base::reserve(count * sizeof(ElementType)));
-    return pw::span_cast<ElementType>(reservation);
+    return pw::span<ElementType>(
+        reinterpret_cast<ElementType *>(reservation.data()),
+        reservation.size() / sizeof(ElementType));
   }
 
   /**
@@ -409,6 +434,16 @@ class Producer : protected internal::ProducerBase {
     return numBytes / sizeof(ElementType);
   }
 
+  /**
+   * Push a single element to the queue if space is available.
+   *
+   * @param element The element to push.
+   * @return pw::OkStatus() on success.
+   */
+  pw::Status push(const ElementType &element) {
+    return push({&element, 1}, /*allOrNothing=*/true).status();
+  }
+
   /** @return true if full. See {@link internal::ProducerBase::full()}. */
   using Base::full;
 
@@ -416,14 +451,10 @@ class Producer : protected internal::ProducerBase {
    * Returns the size of the queue based on the furthest-behind consumer.
    *
    * @param includeReserved Iff true, includes reserved space in the size.
-   * @param includeOverwritable Iff true, includes overwriteable space in the
-   * size.
    * @return the size of the queue.
    */
-  size_t size(bool includeReserved = false,
-              bool includeOverwritable = true) const {
-    return Base::size(includeReserved, includeOverwritable) /
-           sizeof(ElementType);
+  size_t size(bool includeReserved = false) {
+    return Base::size(includeReserved) / sizeof(ElementType);
   }
 
   /** @return the current queue capacity. */
@@ -464,7 +495,7 @@ class Consumer : protected internal::ConsumerBase {
    * @param descOffset The offset of the consumer's descriptor in shared
    * memory. Allocated and shared by the producer endpoint.
    * @param notifyArgs Callback and context for notifying this Consumer.
-   * @param policyBuilder Builder for the Consumer's policy.
+   * @param policyBuilder Builder for the consumer's policy.
    * @param memAccess [optional] MemoryAccess implementation for accessing
    * Queue and element storage.
    * @param overwriteResetOffset [optional] Offset before the Producer's write
@@ -477,15 +508,17 @@ class Consumer : protected internal::ConsumerBase {
       uint32_t descOffset, LocalNotifyArgs notifyArgs,
       ConsumerPolicyBuilder &policyBuilder, MemoryAccess *memAccess = nullptr,
       std::optional<size_t> overwriteResetOffset = std::nullopt) {
+    if (!notifyArgs.fn) {
+      return pw::Status::InvalidArgument();
+    }
     auto base = reinterpret_cast<uintptr_t>(shmemBase);
-    auto *queue =
-        internal::fromOffset<internal::Queue>(base, shmemSize, queueOffset);
-    auto *desc = internal::fromOffset<internal::ConsumerDesc>(base, shmemSize,
-                                                              descOffset);
-    PW_TRY(initialize(base, shmemSize, queue, desc, {.localNotify = notifyArgs},
-                      policyBuilder));
-    return Consumer(base, shmemSize, *queue, *desc, /*remoteNotifyFn=*/{},
-                    memAccess, overwriteResetOffset);
+    PW_TRY_ASSIGN(auto queueAndDesc,
+                  checkArgs(base, shmemSize, queueOffset, descOffset));
+    Consumer consumer(base, shmemSize, *queueAndDesc.first,
+                      *queueAndDesc.second, /*remoteNotifyFn=*/{}, memAccess,
+                      overwriteResetOffset);
+    PW_TRY(consumer.initialize({.localNotify = notifyArgs}, policyBuilder));
+    return consumer;
   }
 
   /**
@@ -501,15 +534,17 @@ class Consumer : protected internal::ConsumerBase {
       uint32_t descOffset, RemoteNotifyArgs notifyArgs,
       ConsumerPolicyBuilder &policyBuilder, MemoryAccess *memAccess = nullptr,
       std::optional<size_t> overwriteResetOffset = std::nullopt) {
+    if (!notifyArgs.fn) {
+      return pw::Status::InvalidArgument();
+    }
     auto base = reinterpret_cast<uintptr_t>(shmemBase);
-    auto *queue =
-        internal::fromOffset<internal::Queue>(base, shmemSize, queueOffset);
-    auto *desc = internal::fromOffset<internal::ConsumerDesc>(base, shmemSize,
-                                                              descOffset);
-    PW_TRY(initialize(base, shmemSize, queue, desc, {.remoteId = notifyArgs.id},
-                      policyBuilder));
-    return Consumer(base, shmemSize, *queue, *desc, std::move(notifyArgs.fn),
-                    memAccess, overwriteResetOffset);
+    PW_TRY_ASSIGN(auto queueAndDesc,
+                  checkArgs(base, shmemSize, queueOffset, descOffset));
+    Consumer consumer(base, shmemSize, *queueAndDesc.first,
+                      *queueAndDesc.second, std::move(notifyArgs.fn), memAccess,
+                      overwriteResetOffset);
+    PW_TRY(consumer.initialize({.remoteId = notifyArgs.id}, policyBuilder));
+    return consumer;
   }
 
   // Moveable.
@@ -526,19 +561,19 @@ class Consumer : protected internal::ConsumerBase {
   virtual ~Consumer() = default;
 
   /**
-   * Sets a new ConsumerPolicy.
+   * Updates the current policy, notifying the producer if necessary.
    *
-   * See {@link internal::ConsumerBase::updatePolicy()} for more details.
+   * See {@link #internal::ConsumerBase::updatePolicy()} for more details.
    */
   using Base::updatePolicy;
 
-  /** Disables this instance. See {@link internal::ConsumerBase::disable()} */
+  /** Disables this instance. See {@link #internal::ConsumerBase::disable()} */
   using Base::disable;
 
   /**
    * Returns a pw::Status indicating the state of this Consumer.
    *
-   * See {@link internal::ConsumerBase::checkState()} for more details.
+   * See {@link #internal::ConsumerBase::checkState()} for more details.
    */
   using Base::checkState;
 
@@ -560,7 +595,9 @@ class Consumer : protected internal::ConsumerBase {
   pw::Result<pw::span<const ElementType>> peek(size_t count) {
     PW_TRY_ASSIGN(pw::ConstByteSpan bytes,
                   Base::peek(count * sizeof(ElementType)));
-    return pw::span_cast<const ElementType>(bytes);
+    return pw::span<const ElementType>(
+        reinterpret_cast<ElementType *>(bytes.data()),
+        bytes.size() / sizeof(ElementType));
   }
 
   /**
