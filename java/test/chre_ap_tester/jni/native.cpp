@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#define LOG_TAG "chredemojni native.cpp"
+#define LOG_TAG "CHRE_AP"
 
 #include "chre/core/event_loop.h"
 #include "chre/core/event_loop_manager.h"
@@ -22,6 +22,7 @@
 #include "chre/platform/shared/init.h"
 
 #include <android/log_macros.h>
+
 #include <stdio.h>
 #include <memory>
 #include <thread>
@@ -33,11 +34,9 @@ std::unique_ptr<std::thread> chreThread = nullptr;
 
 static jint init(JNIEnv * /*env*/, jobject /*thiz*/) {
   if (chreThread != nullptr) {
-    ALOGE("CHRE AP env already inited");
+    ALOGE("Environment already initialized");
     return 0;
   }
-  // Initialize logging.
-  chre::PlatformLogSingleton::init();
   // Initialize the system.
   chre::initCommon();
 
@@ -45,7 +44,10 @@ static jint init(JNIEnv * /*env*/, jobject /*thiz*/) {
     chre::EventLoopManagerSingleton::get()->lateInit();
     // Load static nanoapps unless they are disabled by a command-line flag.
     chre::loadStaticNanoapps();
-    ALOGD("CHRE AP env: nanoapps loaded");
+
+    ALOGD("%zu nanoapps loaded", chre::EventLoopManagerSingleton::get()
+                                     ->getEventLoop()
+                                     .getNanoappCount());
     chre::EventLoopManagerSingleton::get()->getEventLoop().run();
   });
 
@@ -59,18 +61,21 @@ static void destroy(JNIEnv * /*env*/, jobject /*thiz*/) {
   }
   chreThread.reset();
   chre::deinitCommon();
-  chre::PlatformLogSingleton::deinit();
-  ALOGD("CHRE AP env: destroyed");
+  ALOGD("Environment destroyed");
 }
 
-static jint loadNanoApp(JNIEnv * /*env*/, jobject /*thiz*/,
-                        jlong /*nanoAppId*/) {
-  return 0;
+static jint loadNanoAppFromFile(JNIEnv *env, jobject /*thiz*/,
+                                jstring filename) {
+  auto nanoapp = chre::MakeUnique<chre::Nanoapp>();
+  nanoapp->loadFromFile(env->GetStringUTFChars(filename, nullptr));
+  return chre::EventLoopManagerSingleton::get()->getEventLoop().startNanoapp(
+      std::move(nanoapp));
 }
 
-static jint unloadNanoApp(JNIEnv * /*env*/, jobject /*thiz*/,
-                          jlong /*nanoAppId*/) {
-  return 0;
+static jboolean unloadNanoApp(JNIEnv * /*env*/, jobject /*thiz*/,
+                              jlong nanoAppInstanceId) {
+  return chre::EventLoopManagerSingleton::get()->getEventLoop().unloadNanoapp(
+      nanoAppInstanceId, false /*allowSystemNanoappUnload*/);
 }
 
 static jboolean sendMessage(JNIEnv *env, jobject /*thiz*/, jlong nanoAppId,
@@ -89,8 +94,11 @@ static jboolean sendMessage(JNIEnv *env, jobject /*thiz*/, jlong nanoAppId,
 static JNINativeMethod methods[] = {
     {"init", "()I", (void *)init},
     {"destroy", "()V", (void *)destroy},
-    {"loadNanoApp", "(J)I", (void *)loadNanoApp},
-    {"unloadNanoApp", "(J)I", (void *)unloadNanoApp},
+    {"loadNanoAppFromFile",
+     ""
+     "(Ljava/lang/String;)Z",
+     (void *)loadNanoAppFromFile},
+    {"unloadNanoApp", "(J)Z", (void *)unloadNanoApp},
     {"sendMessage", "(JI[BI)Z", (void *)sendMessage}};
 
 // Register native methods for all classes we know about.

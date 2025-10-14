@@ -25,7 +25,6 @@
 #include "pw_allocator/layout.h"
 #include "pw_bytes/span.h"
 #include "pw_result/result.h"
-#include "pw_span/span.h"
 #include "pw_status/status.h"
 
 namespace chre::shmem_spmc_queue {
@@ -44,7 +43,7 @@ namespace internal {
 // implementation.
 static_assert(std::atomic<uint32_t>::is_always_lock_free);
 
-// Analog to nullptr for offsets in shared memory.
+//! Analog to nullptr for offsets in shared memory.
 constexpr uint32_t kOffsetInvalid = UINT32_MAX;
 
 /** Consumer notification and overwrite policy. */
@@ -81,14 +80,15 @@ struct ProducerDesc {
  * Flags used by the Producer to indicate exceptional state.
  *
  * Flags are mutually exclusive and the latest value takes precedence over
- * previous ones.
+ * previous ones. The values are a bitmask to make it easy to compare against a
+ * set of values.
  */
 enum class ProducerFlags : uint16_t {
-  kNone = 0,
-  kPendingInit,  // Consumer state allocated, pending Consumer().
-  kBlocking,     // Producer cannot write until this Consumer reads.
-  kOverwrite,    // Producer overwrote this Consumer.
-  kReset,        // Producer torn down.
+  kNone = 0x0,            // No flags set. Consumer does not need to ack this.
+  kPendingInit = 0x1,     // Consumer state allocated, pending Consumer().
+  kBlocking = 0x1 << 1,   // Producer cannot write until this Consumer reads.
+  kOverwrite = 0x1 << 2,  // Producer overwrote this Consumer.
+  kReset = 0x1 << 3,      // Producer torn down.
 };
 
 /** Flags used by the Consumer to acknowledge ProducerFlags or tear down. */
@@ -120,7 +120,7 @@ struct ConsumerDesc {
   // { 0-15: ConsumerFlags | 16-31: latest value of producerFlags counter }
   std::atomic<uint32_t> consumerFlags;
   // Consumer policy.
-  ConsumerPolicy policy;
+  std::atomic<uint32_t> policy;
   // Padding bytes.
   uint8_t padding[8];
 };
@@ -195,10 +195,12 @@ class ProducerBase {
         kBlockLayout = other.kBlockLayout;
         kDataOffset = other.kDataOffset;
         kBlockCapacity = other.kBlockCapacity;
-        kLocal = other.kLocal;
         mDesc = other.mDesc;
-        mMaxBlockCount = other.mMaxBlockCount;
-        mMinBlockCount = other.mMinBlockCount;
+        mCurrBlock = other.mCurrBlock;
+        mBlockCount = other.mBlockCount;
+        mReserved = other.mReserved;
+        mAvailable = other.mAvailable;
+        mCurrBlockIndex = other.mCurrBlockIndex;
         mActive = true;
       }
       other.mActive = false;
@@ -224,7 +226,10 @@ class ProducerBase {
   pw::Status setMaxBlockCountTarget(size_t count, bool force = false);
 
   /** @return The current target maximum block count. */
-  size_t getMaxBlockCountTarget() const;
+  size_t getMaxBlockCountTarget() const {
+    // TODO(b/448384247): Support dynamic sizing.
+    return mBlockCount;
+  };
 
   /**
    * Sets the desired minimum block count.
@@ -240,10 +245,15 @@ class ProducerBase {
   pw::Status setMinBlockCountTarget(size_t count);
 
   /** @return The current target minimum block count. */
-  size_t getMinBlockCountTarget() const;
+  size_t getMinBlockCountTarget() const {
+    // TODO(b/448384247): Support dynamic sizing.
+    return mBlockCount;
+  };
 
   /** @return The current block count. */
-  size_t getBlockCount() const;
+  size_t getBlockCount() const {
+    return mBlockCount;
+  };
 
   /**
    * Reserve up-to-count contiguous bytes for writing if there is space.
@@ -274,21 +284,22 @@ class ProducerBase {
   /** Push the given data to the queue if space is available. */
 
   /** @return true iff the queue is full and at max capacity. */
-  bool full() const;
+  bool full() {
+    return size() == capacity();
+  }
 
   /**
    * Returns the number of bytes available to the furthest-behind Consumer.
    *
    * @param includeReserved Iff true, includes reserved space in the size.
-   * @param includeOverwritable Iff true, includes overwriteable space in the
-   * size.
    * @return the size of the queue in bytes.
    */
-  size_t size(bool includeReserved = false,
-              bool includeOverwritable = true) const;
+  size_t size(bool includeReserved = false);
 
   /** @return the current queue capacity. */
-  size_t capacity() const;
+  size_t capacity() const {
+    return kBlockCapacity * mBlockCount;
+  }
 
  protected:
   /**
@@ -299,6 +310,7 @@ class ProducerBase {
    * @param queue The queue metadata in shared memory.
    * @param allocator Allocator used for element storage.
    * @param layout Layout for allocating Blocks.
+   * @param blockCapacity The capacity of each Block in bytes.
    * @param maxBlockCount The maximum allowed blocks of element storage. Must
    * be >= minBlockCount.
    * @param minBlockCount The minimum required blocks of element storage. Must
@@ -307,11 +319,11 @@ class ProducerBase {
    * LocalNotifyFn for notifying it.
    * @return pw::OkStatus() on success.
    */
-  static pw::Status initialize(uintptr_t shmemBase, size_t shmemSize,
+  static pw::Status initialize(uintptr_t shmemBase, uint32_t shmemSize,
                                Queue *queue, pw::Allocator &allocator,
                                pw::allocator::Layout layout,
-                               size_t maxBlockCount, size_t minBlockCount,
-                               IdOrNotifyFn idOrNotifyFn);
+                               uint32_t blockCapacity, size_t maxBlockCount,
+                               size_t minBlockCount, IdOrNotifyFn idOrNotifyFn);
 
   /**
    * See {@link Producer::create()} for a description of most parameters.
@@ -328,6 +340,92 @@ class ProducerBase {
                DataNotifier &dataNotifier, ConsumerManager &consumerManager,
                RemoteNotifyFn remoteNotifyFn, MemoryAccess *memAccess);
 
+  /**
+   * Checks whether the queue can accommodate the given amount of data.
+   *
+   * On success, updates the available space by the returned size.
+   *
+   * @param count The number of bytes to be push()d or reserve()d.
+   * @param allOrNothing Iff true, this is an all-or-nothing operation.
+   * @return The number of bytes to push() or reserve() on success. May be less
+   * than count if allOrNothing is unset.
+   */
+  pw::Result<size_t> checkAvailable(size_t count, bool allOrNothing);
+
+  /**
+   * Advances the write index, possibly copying data into the queue.
+   *
+   * This is invoked from either push() or commit(). Only push() provides data.
+   * commit() effectively publishes data written to previously reserve()d space,
+   * as advancing the write index makes that data accessible to consumers.
+   *
+   * @param count The number of bytes to advance.
+   * @param data [optional] The data to copy. The size is greater than or equal
+   * to count.
+   */
+  void advanceWriteIndex(uint32_t count, std::optional<pw::ConstByteSpan> data);
+
+  /**
+   * Enters the next block, updating all of the given parameters.
+   *
+   * @param block [in/out] The current block. Stores the next block pointer.
+   * @param correction [in/out] The current index correction. Stores the updated
+   * value.
+   * @param index [out] Stores the starting index in the next block.
+   * @param convertSkipToBase Iff true, converts the skip index to a base index
+   * in the next block. This is used to avoid converting more than once on the
+   * same block on commit() since it would have been done on reserve().
+   */
+  void enterNextBlock(BlockHeader *&block, uint32_t &correction,
+                      uint32_t &index, bool convertSkipToBase);
+
+  /**
+   * Updates the write index.
+   *
+   * If necessary, initializes a new block and updates the queue metadata to
+   * point to the ProducerDesc in the new block.
+   *
+   * @param tailBlock Pointer to the new tail block. May be the same as the
+   * current tail block.
+   * @param writeIndex The new write index value.
+   * @param correction The new index correction value.
+   */
+  void updateWriteIndex(BlockHeader *tailBlock, uint32_t writeIndex,
+                        uint32_t correction);
+
+  /**
+   * Iterates over consumers to recalculate available space.
+   *
+   * While iterating, checks whether a Consumer has been overwritten or would
+   * block the producer, flagging them accordingly. The optional increment is
+   * used to determine whether a push()/reserve() would result in these states.
+   *
+   * Consumers in exceptional states (overwritten, blocking, etc.) except for
+   * blocking the producer are excluded from the available space calculations.
+   *
+   * @param increment The size of a prospective push/reserve operation,
+   * otherwise 0.
+   */
+  void updateAvailable(uint32_t increment = 0);
+
+  /**
+   * Sets the given flag on a consumer.
+   *
+   * @param desc The consumer descriptor.
+   * @param current The current desc.producerFlags value.
+   * @param flag The flag to set.
+   * @param forceNotify If true, notify the consumer regardless of their policy.
+   */
+  void setConsumerFlag(ConsumerDesc &desc, uint32_t current, ProducerFlags flag,
+                       bool forceNotify = false);
+
+  /**
+   * Notifies a consumer.
+   *
+   * @param desc The consumer descriptor.
+   */
+  void notifyConsumer(ConsumerDesc &desc);
+
   // Members fixed on construction.
   RemoteNotifyFn mRemoteNotifyFn;
   uintptr_t kShmemBase;
@@ -340,11 +438,13 @@ class ProducerBase {
   uint32_t kShmemSize;
   uint32_t kDataOffset;
   uint32_t kBlockCapacity;
-  bool kLocal;
 
   ProducerDesc *mDesc;
-  size_t mMaxBlockCount;
-  size_t mMinBlockCount;
+  BlockHeader *mCurrBlock;
+  size_t mBlockCount;
+  size_t mReserved = 0;
+  size_t mAvailable = 0;
+  uint32_t mCurrBlockIndex = 0;
   bool mActive = true;
 };
 
@@ -357,8 +457,23 @@ class ConsumerBase {
   ConsumerBase(ConsumerBase &&other) {
     *this = std::move(other);
   }
-  ConsumerBase &operator=(ConsumerBase && /*other*/) {
-    // TODO(b/445967147): Implement.
+  ConsumerBase &operator=(ConsumerBase &&other) {
+    if (&other != this) {
+      if (other.mStatus.ok()) {
+        kShmemBase = other.kShmemBase;
+        kShmemSize = other.kShmemSize;
+        mQueue = other.mQueue;
+        mDesc = other.mDesc;
+        mRemoteNotifyFn = std::move(other.mRemoteNotifyFn);
+        mMemAccess = other.mMemAccess;
+        mOverwriteResetOffset = other.mOverwriteResetOffset;
+        kBlockCapacity = other.kBlockCapacity;
+        kDataOffset = other.kDataOffset;
+        mEpoch = other.mEpoch;
+        mStatus = pw::OkStatus();
+      }
+      other.mStatus = pw::Status::NotFound();
+    }
     return *this;
   }
 
@@ -367,10 +482,10 @@ class ConsumerBase {
   /**
    * Updates the current policy. Notifies the Producer.
    *
-   * @param policyBuilder Builder for the new policy.
+   * @param policyBuilder Builder for the new consumer policy.
    * @return pw::OkStatus() on success.
    */
-  pw::Status updatePolicy(ConsumerPolicyBuilder &policyBuilder);
+  pw::Status updatePolicy(ConsumerPolicyBuilder &policy);
 
   /** Disables this instance. Should be called when the Producer crashes. */
   void disable();
@@ -430,20 +545,17 @@ class ConsumerBase {
 
  protected:
   /**
-   * Checks that the ConsumerDesc is in a valid state.
+   * Checks arguments before initializing.
    *
    * @param shmemBase The base address of the queue shared memory region.
    * @param shmemSize The size of the queue shared memory region.
    * @param queueOffset The queue metadata in shared memory.
    * @param descOffset The consumer descriptor in shared memory.
-   * @param idOrNotifyFn The new instance's id for remote notifications or the
-   * LocalNotifyArgs for notifying it.
-   * @param policyBuilder Builder for the ConsumerPolicy.
-   * @return pw::OkStatus() on success.
+   * @return On success, a pair of pointers to the Queue and ConsumerDesc.
    */
-  static pw::Status initialize(uintptr_t base, uint32_t shmemSize, Queue *queue,
-                               ConsumerDesc *desc, IdOrNotifyFn idOrNotifyFn,
-                               ConsumerPolicyBuilder &policyBuilder);
+  static pw::Result<std::pair<Queue *, ConsumerDesc *>> checkArgs(
+      uintptr_t base, uint32_t shmemSize, uint32_t queueOffset,
+      uint32_t descOffset);
 
   /**
    * See {@link Consumer::createDynamic()} for most parameters.
@@ -458,6 +570,48 @@ class ConsumerBase {
                ConsumerDesc &desc, uint32_t dataOffset,
                RemoteNotifyFn remoteNotifyFn, MemoryAccess *memAccess,
                std::optional<size_t> overwriteResetOffset);
+
+  /**
+   * One-time post-construction initialization.
+   *
+   * @param idOrNotifyFn The new instance's id for remote notifications or the
+   * LocalNotifyFn for notifying it.
+   * @param policyBuilder Builder for the consumer's policy.
+   * @return pw::OkStatus() on success.
+   */
+  pw::Status initialize(IdOrNotifyFn idOrNotifyFn,
+                        ConsumerPolicyBuilder &policyBuilder);
+
+  /** @return On success, the current producer descriptor. */
+  pw::Result<ProducerDesc *> getProducerDesc();
+
+  /**
+   * Notifies the Producer.
+   *
+   * @param producerDesc The producer descriptor.
+   */
+  void notifyProducer(ProducerDesc &producerDesc);
+
+  /**
+   * Clears the producer flags.
+   *
+   * @param flag The value loaded from ConsumerDesc.producerFlags.
+   */
+  void clearFlag(uint32_t flag);
+
+  // Members fixed on construction.
+  RemoteNotifyFn mRemoteNotifyFn;
+  uintptr_t kShmemBase;
+  Queue *mQueue;
+  ConsumerDesc *mDesc;
+  MemoryAccess *mMemAccess;
+  size_t mOverwriteResetOffset;
+  uint32_t kShmemSize;
+  uint32_t kBlockCapacity;
+  uint32_t kDataOffset;
+
+  uint32_t mEpoch;
+  pw::Status mStatus = pw::OkStatus();
 };
 
 // Returns the offset of the object from base.
