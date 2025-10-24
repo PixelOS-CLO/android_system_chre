@@ -1,11 +1,10 @@
 # CHRE Development Tools
 
-This directory contains tools and configuration files for setting up a development
-environment for CHRE. The [Usage](#usage) section explains how one can use it.
-The [Configuration](#configuration) section explains the setup of shell environment variables
-through
-`env_config.json`. Some of the [Python scripts](#public) are designed to be used as a standalone
-tool to facilitate various needs.
+This directory contains the tools and configuration files required to establish a development
+environment for the Context Hub Runtime Environment (CHRE). The [Usage](#usage) section details the
+operational procedures, while the [Configuration](#configuration) section explains the setup of
+shell environment variables via `env_config.json`. Several [Python scripts](#public) are designed
+for standalone use to support specific development tasks.
 
 ## Usage
 
@@ -26,6 +25,10 @@ sourcing the `env_setup.sh` script.
 Now running `chre_lunch <platform-target>` will set up environment for a specific platform and
 target combination. For example, to start development of nanoapp on tinysys platform, run
 `chre_lunch tinysys-nanoapp`. This step is required to enable `chre_make` and `chre_flash` to work.
+
+Any missing command-line tools that are required will be listed out immediately after running
+`chre_lunch`. Currently, it's left to the user to install them as different OS has different
+commands for installation.
 
 ### Build a target
 
@@ -149,11 +152,37 @@ functions defined in `env_setup.py`.
         "action_clone_repo",
         "https://a-link.to.your.qsh.branch",
         "$QSH_BRANCH",
-        "/tmp/qsh-$QSH_BRANCH"
+        "$CHRE_DEV_PATH/mirror-qsh-$QSH_BRANCH"
       ]
       ```
       the above action will clone the qsh repository from the branch specified by the
-      environment variable `QSH_BRANCH` into the directory `/tmp/qsh-$QSH_BRANCH`.
+      environment variable `QSH_BRANCH` into the directory `$CHRE_DEV_PATH/mirror-qsh-$QSH_BRANCH`.
+
+## File Structure
+
+The CHRE development environment maintains a structured file system to ensure consistency and
+isolation between different platform-target configurations. This organization is centered around
+the `CHRE_DEV_PATH` environment variable.
+
+### `CHRE_DEV_PATH`
+
+This is the root directory for all development files related to a specific platform-target
+combination. It is automatically set to `~/.chre_dev/<platform_name>-<target_name>` when you run
+`chre_lunch`. For example, if you run `chre_lunch tinysys-nanoapp`, `CHRE_DEV_PATH` will be set to
+`~/.chre_dev/tinysys-nanoapp`.
+
+### Python Virtual Environment
+
+To maintain dependency isolation, a Python virtual environment is created within the
+`CHRE_DEV_PATH`. Specifically, it is located at `$CHRE_DEV_PATH/venv`. This ensures that each
+platform-target combination has its own set of Python packages, preventing version conflicts.
+
+### `env_vars.txt`
+
+To streamline the setup process, the environment variables you provide during the `chre_lunch`
+are saved to a file named `env_vars.txt` inside the `CHRE_DEV_PATH`. The next time you run
+`chre_lunch` for the same platform-target, the script will detect this file and ask if you want to
+reuse the saved settings. This feature saves you from re-entering the same information repeatedly.
 
 ## Python Scripts
 

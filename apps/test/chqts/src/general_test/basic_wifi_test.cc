@@ -259,6 +259,9 @@ void validateRssi(int8_t rssi) {
   // right next to a high-power AP (e.g. transmitting at 20 dBm),
   // in which case RSSI will be < 20 dBm. Place a high threshold to check
   // against values likely to be erroneous (36 dBm/4W).
+  if (rssi >= 36) {
+    LOGE("Received unexpected RSSI value: %" PRId8, rssi);
+  }
   EXPECT_LT_OR_RETURN(rssi, 36, "RSSI is greater than 36");
 }
 
@@ -638,7 +641,9 @@ void BasicWifiTest::validateWifiScanResult(uint8_t count,
     validateFreqAndChannel(results[i].primaryChannel, results[i].band,
                            mApiVersion);
     validateCenterFreq(results[i], mApiVersion);
-    validateVenueInfo(results[i]);
+    if (mWifiCapabilities & CHRE_WIFI_CAPABILITIES_VENUE_INFO) {
+      validateVenueInfo(results[i]);
+    }
   }
 }
 

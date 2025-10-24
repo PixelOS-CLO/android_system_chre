@@ -14,23 +14,14 @@
  * limitations under the License.
  */
 
-#include "gtest/gtest.h"
+#include "chre/core/nanoapp.h"
+#include "chre/core/static_nanoapps.h"
 
-#include "chre/util/default_container_allocator.h"
-
-#include "pw_allocator/layout.h"
-
-using ::pw::allocator::Layout;
-
+#ifdef SIMULATION_LOAD_STATIC
 namespace chre {
-namespace {
 
-TEST(DefaultContainerAllocatorTest, TestAllocate) {
-  DefaultContainerAllocator allocator;
-  void *ptr = allocator.Allocate(Layout(10));
-  EXPECT_NE(ptr, nullptr);
-  allocator.Deallocate(ptr);
-}
+StaticNanoappInitFunction const kStaticNanoappList[] = {};
 
-}  // namespace
+const size_t kStaticNanoappCount = ARRAY_SIZE(kStaticNanoappList);
 }  // namespace chre
+#endif  // SIMULATION_LOAD_STATIC
