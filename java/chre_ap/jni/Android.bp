@@ -14,27 +14,35 @@
 // limitations under the License.
 //
 
+// This makefile supplies the rules for building a library of JNI code for
+// use by our example of how to bundle a shared library with an APK.
+
 package {
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
-android_app {
-    name: "ContextHubAPTester",
-    srcs: ["src/**/*.java"],
-    jni_libs: [
-        "libchre_jni",
-        "nanoapp_hello_world",
+cc_library_shared {
+    name: "libchre_jni",
+    // All of the source files that we will compile.
+    srcs: ["native.cpp"],
+    // All of the shared libraries we link against.
+    shared_libs: [
+        "libandroid",
+        "liblog",
     ],
+    // No static libraries.
     static_libs: [
-        "context-hub-ap-lib",
+        "chre_ap_nanoapp",
+        "chre_ap",
+        "pw_allocator",
+        "pw_span",
     ],
-    optimize: {
-        enabled: false,
-    },
-    platform_apis: true,
-    dex_preopt: {
-        enabled: false,
-    },
-    resource_dirs: ["res"],
-    use_embedded_native_libs: true,
+    defaults: [
+        "chre_android_common_cflags",
+    ],
+    cflags: [
+        "-Wall",
+        "-Werror",
+    ],
+    header_libs: ["jni_headers"],
 }

@@ -75,16 +75,6 @@ flag {
 }
 
 flag {
-  name: "simplify_service_transaction_lock"
-  namespace: "context_hub"
-  description: "Flag guarding the simplification of the ContextHubService transaction lock"
-  bug: "433754168"
-  metadata {
-    purpose: PURPOSE_BUGFIX
-  }
-}
-
-flag {
   name: "hal_client_new_connect_in_background"
   namespace: "context_hub"
   description: "Use the new implementation for HalClient::connectInBackground"
@@ -117,6 +107,30 @@ flag {
   namespace: "context_hub"
   description: "Flag guarding the optimizing of the ContextHubService transaction lock"
   bug: "444955194"
+  metadata {
+    purpose: PURPOSE_BUGFIX
+  }
+}
+
+flag {
+  name: "fmcq_api"
+  namespace: "context_hub"
+  description: "Enables ContextHub APIs for fast multiple-consumer queues"
+  bug: "452127514"
+}
+
+flag {
+  name: "fmcq_implementation"
+  namespace: "context_hub"
+  description: "Enables support for ContextHub APIs for fast multiple-consumer queues"
+  bug: "452127514"
+}
+
+flag {
+  name: "high_number_host_endpoint_fix"
+  namespace: "context_hub"
+  description: "Flag guarding the fix for high number host endpoints"
+  bug: "450934734"
   metadata {
     purpose: PURPOSE_BUGFIX
   }
