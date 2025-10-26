@@ -18,6 +18,7 @@
 
 #include "chre/event.h"
 #include "chre/platform/atomic.h"
+#include "chre/platform/context.h"
 #include "chre/platform/fatal_error.h"
 #include "chre/platform/memory.h"
 #include "chre/util/lock_guard.h"
@@ -26,11 +27,23 @@
 namespace chre {
 
 Nanoapp *EventLoopManager::validateChreApiCall(const char *functionName) {
-  chre::Nanoapp *currentNanoapp =
-      EventLoopManagerSingleton::get()->getEventLoop().getCurrentNanoapp();
+  EventLoop *eventLoop = getCurrentEventLoop();
+  CHRE_ASSERT_LOG(eventLoop, "%s called with no CHRE context", functionName);
+
+  chre::Nanoapp *currentNanoapp = eventLoop->getCurrentNanoapp();
   CHRE_ASSERT_LOG(currentNanoapp, "%s called with no CHRE app context",
                   functionName);
   return currentNanoapp;
+}
+
+bool EventLoopManager::inEventLoopForNanoapp(uint64_t appId) {
+  EventLoop *eventLoop = getCurrentEventLoop();
+  if (!eventLoop) {
+    return false;
+  }
+
+  uint16_t instanceId;
+  return eventLoop->findNanoappInstanceIdByAppId(appId, &instanceId);
 }
 
 uint16_t EventLoopManager::getNextInstanceId() {

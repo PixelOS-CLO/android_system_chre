@@ -16,71 +16,220 @@
 
 package com.google.android.chre.aptester;
 
+import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.pm.ApplicationInfo;
+import android.hardware.location.ContextHubInfo;
+import android.hardware.location.ContextHubTransaction;
+import android.hardware.location.NanoAppMessage;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.util.Log;
 import android.view.Gravity;
-import android.view.View;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.Toast;
 
+import com.google.android.chre.ap.ContextHubAPManager;
+import com.google.android.chre.ap.ContextHubAPNative;
+import com.google.android.chre.ap.NanoAppInfo;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Enumeration;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
+
+@SuppressLint({"SetTextI18n", "DefaultLocale"})
 public class ContextHubAPTester extends Activity {
+    private static final String TAG = "ContextHubAPTester";
+
     // Declare a TextView to display the result
     private TextView mResultTextView;
+    private Spinner mNanoappSpinner;
+    private LinearLayout mNanoAppListLayout;
+    private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+    private TextView mMessageTextView;
 
-    /** Called when the activity is first created. */
+    private Set<String> getBundledSoFileNames() {
+        Set<String> soFileNames = new HashSet<>();
+
+        ApplicationInfo appInfo = getApplicationInfo();
+        String apkPath = appInfo.sourceDir;
+        Log.d(TAG, "APK Path: " + apkPath);
+
+        ZipFile zipFile = null;
+        try {
+            zipFile = new ZipFile(new File(apkPath));
+
+            Enumeration<? extends ZipEntry> entries = zipFile.entries();
+            while (entries.hasMoreElements()) {
+                ZipEntry entry = entries.nextElement();
+                String entryName = entry.getName();
+                if (entryName.endsWith(".so")) {
+                    File soFile = new File(entryName);
+                    String fileName = soFile.getName();
+                    if (fileName.startsWith("nanoapp_")) {
+                        soFileNames.add(fileName);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to read APK contents", e);
+        } finally {
+            if (zipFile != null) {
+                try {
+                    zipFile.close();
+                } catch (IOException e) {
+                    // ignore
+                }
+            }
+        }
+        return soFileNames;
+    }
+
+    private void populateDynamicNanoappList() {
+        String[] nanoappFiles = getBundledSoFileNames().toArray(new String[0]);
+        ArrayAdapter<String> adapter = new ArrayAdapter<>(
+                this,
+                android.R.layout.simple_spinner_item,
+                nanoappFiles
+        );
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        mNanoappSpinner.setAdapter(adapter);
+    }
+
+    private void populateNanoAppListView() {
+        mMainHandler.postDelayed(() -> {
+            mNanoAppListLayout.removeAllViews();
+
+            NanoAppInfo[] nanoAppInfos = ContextHubAPNative.listNanoapps();
+
+            if (nanoAppInfos == null || nanoAppInfos.length == 0) {
+                TextView emptyView = new TextView(this);
+                emptyView.setText("No nanoapps currently loaded.");
+                emptyView.setPadding(8, 8, 8, 8);
+                mNanoAppListLayout.addView(emptyView);
+                return;
+            }
+
+            for (NanoAppInfo nanoAppInfo : nanoAppInfos) {
+                LinearLayout rowLayout = new LinearLayout(this);
+                rowLayout.setOrientation(LinearLayout.HORIZONTAL);
+                rowLayout.setLayoutParams(new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+                rowLayout.setGravity(Gravity.CENTER_VERTICAL);
+
+                TextView infoTextView = new TextView(this);
+                LinearLayout.LayoutParams textParams = new LinearLayout.LayoutParams(
+                        0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
+                infoTextView.setLayoutParams(textParams);
+                infoTextView.setText(String.format("Instance ID: %d, Name: %s",
+                        nanoAppInfo.mInstanceId, nanoAppInfo.mName));
+                infoTextView.setPadding(8, 8, 8, 8);
+
+                Button unloadButton = new Button(this);
+                unloadButton.setText("Unload");
+                unloadButton.setLayoutParams(new LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT));
+
+                unloadButton.setOnClickListener(v -> {
+                    long idToUnload = nanoAppInfo.mInstanceId;
+                    ContextHubTransaction<Void> transaction =
+                            ContextHubAPManager.getInstance().unloadNanoApp(
+                                    new ContextHubInfo(), idToUnload);
+
+                    ContextHubTransaction.Response<Void> response = null;
+                    try {
+                        response = transaction.waitForResponse(/* timeout= */1, TimeUnit.SECONDS);
+                    } catch (TimeoutException | InterruptedException e) {
+                        mResultTextView.setText("Unload timed out for instance: " + idToUnload);
+                        return;
+                    }
+
+                    if (response != null
+                            && response.getResult() == ContextHubTransaction.RESULT_SUCCESS) {
+                        mResultTextView.setText("Unload successful for instance: " + idToUnload);
+                    } else {
+                        mResultTextView.setText("Unload failed for instance: " + idToUnload);
+                    }
+                    populateNanoAppListView();
+                });
+
+                rowLayout.addView(infoTextView);
+                rowLayout.addView(unloadButton);
+                mNanoAppListLayout.addView(rowLayout);
+            }
+        }, 500);
+    }
+
+    /**
+     * Called when the activity is first created.
+     */
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        // Create a vertical container layout
-        LinearLayout layout = new LinearLayout(this);
-        layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setGravity(Gravity.CENTER);
+        setContentView(R.layout.activity_main);
+        mResultTextView = findViewById(R.id.resultTextView);
+        Button initButton = findViewById(R.id.initButton);
+        Button destroyButton = findViewById(R.id.destroyButton);
+        mNanoappSpinner = findViewById(R.id.nanoappSpinner);
+        Button loadButton = findViewById(R.id.loadButton);
+        mNanoAppListLayout = findViewById(R.id.nanoAppListLayout);
+        Button messageButton = findViewById(R.id.messageButton);
+        mMessageTextView = findViewById(R.id.messageTextView);
 
-        // Create a TextView to show the result
-        mResultTextView = new TextView(this);
-        mResultTextView.setText("Result will be shown here after clicking the button.");
+        populateDynamicNanoappList();
 
-        // Create a Button to trigger init CHRE AP
-        Button initButton = new Button(this);
-        initButton.setText("Init CHRE AP");
-        initButton.setOnClickListener(
-                new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        // Load the nanoapp
-                        ContextHubAPManager manager = ContextHubAPManager.getInstance();
+        initButton.setOnClickListener(v -> {
+            // Start the CHRE environment.
+            ContextHubAPManager.getInstance().init();
+            mResultTextView.setText("CHRE AP: Started");
+            populateNanoAppListView();
+        });
 
-                        String nativeLibraryDir = getApplicationInfo().nativeLibraryDir;
-                        String nanoappPath = nativeLibraryDir + "/libhello_world_nanoapp.so";
-                        boolean success = manager.loadNanoApp(nanoappPath);
+        destroyButton.setOnClickListener(v -> {
+            ContextHubAPManager.getInstance().destroy();
+            mResultTextView.setText("CHRE AP: Destroyed");
+            mNanoAppListLayout.removeAllViews();
+        });
 
-                        if (success) {
-                            mResultTextView.setText("Successfully loaded hello_world nanoapp!");
-                        } else {
-                            mResultTextView.setText(
-                                    "Failed to load hello_world nanoapp from " + nanoappPath);
-                        }
-                    }
-                });
-        layout.addView(initButton);
+        loadButton.setOnClickListener(v -> {
+            String selectedNanoapp = (String) mNanoappSpinner.getSelectedItem();
+            if (selectedNanoapp == null) {
+                Toast.makeText(this, "No nanoapp selected", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            boolean success = ContextHubAPManager.getInstance().loadNanoApp(selectedNanoapp);
+            mResultTextView.setText(
+                    (success ? "Successfully loaded: " : "Failed to load: ") + selectedNanoapp);
+            populateNanoAppListView();
+        });
 
-        // Create a button to destroy CHRE AP
-        Button destroyButton = new Button(this);
-        destroyButton.setText("Destroy CHRE AP");
-        destroyButton.setOnClickListener(
-                new View.OnClickListener() {
-                    @Override
-                    public void onClick(View v) {
-                        Native.destroy();
-                        mResultTextView.setText("destroyed");
-                    }
-                });
-        layout.addView(destroyButton);
-
-        // Setup the rest of the things.
-        layout.addView(mResultTextView);
-        setContentView(layout);
+        // Create a Button to send message to Message World nanoapp.
+        var contextHub = new ContextHubInfo();
+        var callback = new MessageCallback(mMessageTextView);
+        var client = ContextHubAPManager.getInstance().createClient(contextHub, callback);
+        messageButton.setOnClickListener(v -> {
+            var message = NanoAppMessage.createMessageToNanoApp(
+                    0x0123456789000003L /*Message World Nanoapp ID*/, 100,
+                    "Test message".getBytes(StandardCharsets.UTF_8));
+            var result = client.sendMessageToNanoApp(message);
+            mMessageTextView.setText(
+                    "Sent message to Message World Nanoapp with res: "
+                            + result);
+        });
     }
 }
