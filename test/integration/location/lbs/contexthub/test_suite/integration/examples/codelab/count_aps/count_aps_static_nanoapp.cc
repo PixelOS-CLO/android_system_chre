@@ -14,18 +14,16 @@
  * limitations under the License.
  */
 
+#include "examples/codelab/count_aps/count_aps_static_nanoapp.h"
+
 #include "chre/core/nanoapp.h"
 #include "chre/core/static_nanoapps.h"
 #include "chre/util/unique_ptr.h"
 
 namespace chre {
 
-UniquePtr<Nanoapp> initializeStaticNanoappCountAps();
-
-#ifdef CHRE_INTEGRATION_TEST_STATIC_NANOAPP_LIST
 const StaticNanoappInitFunction kStaticNanoappList[] = {
     initializeStaticNanoappCountAps,
 };
 const size_t kStaticNanoappCount = ARRAY_SIZE(kStaticNanoappList);
-#endif
 }  // namespace chre

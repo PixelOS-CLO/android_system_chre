@@ -12,6 +12,8 @@ Assuming `system/chre` project is checked out at `~/main/system/chre`, run
 `source ~/main/system/chre/tools/dev/env_setup.sh && chre_lunch <PLATFORM-TARGET>` and fill out the
 required environment variables, which is a one-time effort. After that you are good to go.
 
+`chre_lunch` also supports customized config file: `chre_lunch -c <path-to-config>`
+
 ```bash
 # build a target
 chre_make
@@ -80,7 +82,14 @@ chre_make -C -s ../../src/general_test
 
 Note that `chre_make` will only generate above two files when `-C` is provided. This is because the
 dryrun output of making the target is used extract source files, include directories, compiler
-flags, and macro definitions. Therefore to generate the target binary please do not add `-C`.
+flags, and macro definitions. Therefore, to generate the target binary please do not add `-C`.
+
+#### Use `-a` for accumulative build
+
+`chre_make -a` does accumulative build, which means it won't run `make clean` before compiling the
+code. The reason that `make clean` is always done by default is because it's known that some of the
+changes like header files and macro definitions in the makefiles might be overlooked during the
+accumulative build. Therefore, option `-a` is discouraged.
 
 ### Flash the target onto the device
 
@@ -88,7 +97,11 @@ After building the target, it can be flashed onto the device by running `chre_fl
 that the binary is copied to is determined by the setting of "install_location" in the
 `env_config.json`.
 
-If `-R` option is provided, the device will reboot.
+Typically, to effectively load the target binary additional on-device action is needed. By default,
+if `quick_flash_command` (see [Target Configuration Fields](#target-configuration-fields)
+for details) is set it will be executed. If it's not set but `chre_aidl_hal_client` exists under
+/vendor/bin while the target type is `nanoapp`, it will be used to unload and load the nanoapp. When
+`-R` option is provided, the above options will be skipped and the device will always be rebooted.
 
 ## Configuration
 
@@ -141,6 +154,8 @@ fields:
 - `install_location` (string, optional): The path where the output binary of the build will be
   installed on the connected physical device. If this is not specified, the output binary will
   not be installed.
+- `quick_flash_command` (string, optional): A command that can be used to quickly load the target
+  after copying the files onto the device.
 - `env_variables` (array, optional): An array of objects where each defines a shell environment
   variables that are specific to this target.
 

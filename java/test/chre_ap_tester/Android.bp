@@ -20,14 +20,21 @@ package {
 
 android_app {
     name: "ContextHubAPTester",
-    srcs: ["**/*.java"],
-    jni_libs: ["libchredemojni"],
+    srcs: ["src/**/*.java"],
+    jni_libs: [
+        "libchre_jni",
+        "nanoapp_hello_world",
+    ],
+    static_libs: [
+        "context-hub-ap-lib",
+    ],
     optimize: {
         enabled: false,
     },
-    sdk_version: "current",
+    platform_apis: true,
     dex_preopt: {
         enabled: false,
     },
+    resource_dirs: ["res"],
     use_embedded_native_libs: true,
 }

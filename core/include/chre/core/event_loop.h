@@ -286,6 +286,19 @@ class EventLoop : public NonCopyable {
                        SystemEventCallbackFunction *callback, void *extraData);
 
   /**
+   * Posts a pre-allocated Event to the event loop.
+   *
+   * @param event A pre-allocated Event pointer.
+   *
+   * @return true if the event was successfully posted to the event queue.
+   */
+  bool postEvent(Event *event);
+
+  bool isRunning() const {
+    return mRunning;
+  }
+
+  /**
    * Returns a pointer to the currently executing Nanoapp, or nullptr if none is
    * currently executing. Must only be called from within the thread context
    * associated with this EventLoop.
@@ -413,7 +426,7 @@ class EventLoop : public NonCopyable {
   }
 
   inline uint32_t getMaxEventQueueSize() const {
-    return mEventPoolUsage.getMax();
+    return mEventQueueUsage.getMax();
   }
 
   inline uint32_t getNumEventsDropped() const {
@@ -437,15 +450,12 @@ class EventLoop : public NonCopyable {
   static constexpr size_t kMaxUnscheduledEventCount =
       CHRE_MAX_UNSCHEDULED_EVENT_COUNT;
 
-  //! The memory pool to allocate incoming events from.
-  SynchronizedMemoryPool<Event, kMaxEventCount> mEventPool;
-
   //! The blocking queue of incoming events from the system that have not been
   //! distributed out to apps yet.
   FixedSizeBlockingQueue<Event *, kMaxUnscheduledEventCount> mEvents;
 
 #else
-  //! The maximum number of event that can be stored in a block in mEventPool.
+  //! The maximum number of event that can be stored in a block in mEventQueue.
   static constexpr size_t kEventPerBlock = CHRE_EVENT_PER_BLOCK;
 
   //! The maximum number of event blocks that mEventPool can hold.
@@ -453,10 +463,6 @@ class EventLoop : public NonCopyable {
 
   static constexpr size_t kMaxEventCount =
       CHRE_EVENT_PER_BLOCK * CHRE_MAX_EVENT_BLOCKS;
-
-  //! The memory pool to allocate incoming events from.
-  SynchronizedExpandableMemoryPool<Event, kEventPerBlock, kMaxEventBlock>
-      mEventPool;
 
   //! The blocking queue of incoming events from the system that have not been
   //! distributed out to apps yet.
@@ -493,8 +499,8 @@ class EventLoop : public NonCopyable {
   //! The object which manages power related controls.
   PowerControlManager mPowerControlManager;
 
-  //! The stats collection used to collect event pool usage
-  StatsContainer<uint32_t> mEventPoolUsage;
+  //! The stats collection used to collect event queue usage
+  StatsContainer<uint32_t> mEventQueueUsage;
 
   //! The number of events dropped due to capacity limits
   uint32_t mNumDroppedLowPriEvents = 0;
@@ -509,18 +515,6 @@ class EventLoop : public NonCopyable {
    */
   void onStopComplete();
 
-  /**
-   * Allocates an event from the event pool and post it.
-   *
-   * @return true if the event has been successfully allocated and posted.
-   *
-   * @see postEventOrDie and postLowPriorityEventOrFree
-   */
-  bool allocateAndPostEvent(uint16_t eventType, void *eventData,
-                            chreEventCompleteFunction *freeCallback,
-                            bool isLowPriority, uint16_t senderInstanceId,
-                            uint16_t targetInstanceId,
-                            uint16_t targetGroupMask);
   /**
    * Remove some non nanoapp and low priority events from back of the queue.
    *
@@ -656,6 +650,11 @@ class EventLoop : public NonCopyable {
    * wakeup buckets once the wakeup bucket interval has been surpassed.
    */
   void setCycleWakeupBucketsTimer();
+
+  /**
+   * @return true if the current thread is running this event loop.
+   */
+  bool inThisEventLoopThread() const;
 };
 
 }  // namespace chre

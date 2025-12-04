@@ -767,6 +767,8 @@ cc_test_host {
         "platform/shared/include",
         "platform/shared/pw_trace/include",
         "util/include",
+        "variant/include",
+        "variant/googletest/include",
     ],
     header_libs: [
         "chre_flatbuffers",
@@ -992,6 +994,168 @@ cc_test_host {
     },
 }
 
+cc_binary {
+    name: "chre_ap_sim",
+    srcs: [
+        "platform/android/init.cc",
+    ],
+    static_libs: [
+        "chre_ap_nanoapp",
+        "chre_ap",
+        "pw_allocator",
+        "pw_span",
+    ],
+    shared_libs: [
+        "libandroid",
+        "liblog",
+    ],
+    defaults: [
+        "chre_android_common_cflags",
+    ],
+}
+
+cc_library_static {
+    name: "chre_ap_nanoapp",
+    srcs: [
+        "variant/android/static_nanoapps.cc",
+        "core/static_nanoapps.cc",
+        "apps/sensor_world/sensor_world.cc",
+        "apps/message_world/message_world.cc",
+    ],
+    local_include_dirs: [
+        "apps/include",
+    ],
+    cflags: [
+        "-DCHRE_VARIANT_SUPPLIES_STATIC_NANOAPP_LIST",
+        "-DCHRE_NANOAPP_INTERNAL",
+    ],
+    defaults: [
+        "chre_android_common_cflags",
+    ],
+    static_libs: [
+        "chre_ap",
+        "pw_allocator",
+        "pw_span",
+    ],
+}
+
+cc_library_static {
+    name: "chre_ap",
+    srcs: [
+        "core/*.cc",
+        "platform/android/context.cc",
+        "platform/android/fatal_error.cc",
+        "platform/android/host_link.cc",
+        "platform/android/memory.cc",
+        "platform/android/memory_manager.cc",
+        "platform/android/platform_sensor.cc",
+        "platform/android/platform_sensor_manager.cc",
+        "platform/android/platform_debug_dump_manager.cc",
+        "platform/android/platform_log.cc",
+        "platform/android/platform_nanoapp.cc",
+        "platform/android/power_control_manager.cc",
+        "platform/android/system_time.cc",
+        "platform/android/system_timer.cc",
+        "platform/shared/assert.cc",
+        "platform/shared/chre_api_audio.cc",
+        "platform/shared/chre_api_ble.cc",
+        "platform/shared/chre_api_core.cc",
+        "platform/shared/chre_api_gnss.cc",
+        "platform/shared/chre_api_msg.cc",
+        "platform/shared/chre_api_re.cc",
+        "platform/shared/chre_api_sensor.cc",
+        "platform/shared/chre_api_user_settings.cc",
+        "platform/shared/chre_api_version.cc",
+        "platform/shared/chre_api_wifi.cc",
+        "platform/shared/chre_api_wwan.cc",
+        "platform/shared/host_protocol_chre.cc",
+        "platform/shared/host_protocol_common.cc",
+        "platform/shared/init.cc",
+        "platform/shared/log_buffer.cc",
+        "platform/shared/memory_manager.cc",
+        "platform/shared/nanoapp_abort.cc",
+        "platform/shared/sensor_pal/platform_sensor_type_helpers.cc",
+        "platform/shared/system_time.cc",
+        "platform/shared/version.cc",
+        "util/**/*.cc",
+    ],
+    exclude_srcs: [
+        "util/tests/**/*",
+    ],
+    export_include_dirs: [
+        "chre_api/include",
+        "chre_api/include/chre_api",
+        "core/include",
+        "pal/include",
+        "pal/util/include",
+        "platform/include",
+        "platform/android/include",
+        "platform/shared/fbs/include",
+        "platform/shared/include",
+        "platform/shared/nanoapp_memory_guard_no_op/include",
+        "platform/shared/public_platform_debug_dump_manager",
+        "util/include",
+        "variant/include",
+        "variant/android/include",
+    ],
+    header_libs: [
+        "chre_api",
+        "chre_flatbuffers",
+    ],
+    defaults: [
+        "chre_android_common_cflags",
+        "pw_android_common_backends",
+        "pw_rpc_cflags_chre",
+    ],
+    cflags: [
+        "-DCHRE_AP_ALSO_LOG_TO_STDERR",
+    ],
+    static_libs: [
+        "pw_allocator",
+        "pw_bytes",
+        "pw_containers",
+        "pw_function",
+        "pw_intrusive_ptr",
+        "pw_multibuf",
+        "pw_multibuf_allocator",
+        "pw_result",
+        "pw_rpc_chre",
+        "pw_status",
+    ],
+    shared_libs: [
+        "libandroid",
+        "libbase",
+        "liblog",
+    ],
+}
+
+cc_defaults {
+    name: "chre_android_common_cflags",
+    cflags: [
+        // Feature enabled flags.
+        "-DCHRE_ASSERTIONS_ENABLED=true",
+        "-DCHRE_RELIABLE_MESSAGE_SUPPORT_ENABLED",
+        "-DCHRE_SENSORS_SUPPORT_ENABLED",
+        // Other common flags.
+        "-DCHRE_FILENAME=__FILE__",
+        "-DCHRE_FIRST_SUPPORTED_API_VERSION=CHRE_API_VERSION_1_1",
+        "-DCHRE_LARGE_PAYLOAD_MAX_SIZE=32000",
+        "-DCHRE_MESSAGE_ROUTER_MAX_HOST_ENDPOINTS=8",
+        "-DCHRE_MESSAGE_ROUTER_MAX_HOST_HUBS=2",
+        "-DCHRE_MESSAGE_ROUTER_MAX_MESSAGE_HUBS=6",
+        "-DCHRE_MESSAGE_ROUTER_MAX_SESSIONS=10",
+        "-DCHRE_MESSAGE_ROUTER_RESERVED_SESSION_ID=0x8000",
+        "-DCHRE_MESSAGE_TO_HOST_MAX_SIZE=4096",
+        "-DCHRE_MINIMUM_LOG_LEVEL=CHRE_LOG_LEVEL_DEBUG",
+        "-DCHRE_PATCH_VERSION=0",
+        "-DCHRE_PLATFORM_ID=0x000001",
+        "-DCHRE_NANOAPP_DISABLE_BACKCOMPAT",
+        "-Wall",
+        "-Werror",
+        "-Wvla-extension",
+    ],
+}
+
 cc_library_static {
     name: "chre_linux",
     vendor: true,
@@ -1017,8 +1181,6 @@ cc_library_static {
         "platform/shared/chre_api_sensor.cc",
         "platform/shared/chre_api_user_settings.cc",
         "platform/shared/chre_api_wifi.cc",
-        "platform/shared/host_protocol_chre.cc",
-        "platform/shared/host_protocol_common.cc",
         "platform/shared/init.cc",
         "platform/shared/log_buffer.cc",
         "platform/shared/memory_manager.cc",
@@ -1059,6 +1221,8 @@ cc_library_static {
         "platform/shared/public_platform_wwan_pal",
         "platform/shared/sensor_pal/include",
         "util/include",
+        "variant/include",
+        "variant/googletest/include",
     ],
     header_libs: [
         "chre_api",
@@ -1244,6 +1408,8 @@ cc_library_static {
         "platform/shared/public_platform_gnss_pal",
         "platform/shared/sensor_pal/include",
         "platform/shared/public_platform_wifi_pal",
+        "variant/include",
+        "variant/googletest/include",
     ],
     include_dirs: [
         "external/abseil-cpp/",
@@ -1294,6 +1460,7 @@ cc_library_static {
         "test/integration/location/lbs/contexthub/test_suite/integration/platform/simulator_test.cc",
     ],
     export_include_dirs: [
+        "apps/nearby",
         "chre_api/include",
         "chre_api/include/chre_api",
         "core/include",
@@ -1315,7 +1482,8 @@ cc_library_static {
         "util/include",
         "test",
         "test/integration",
-        "apps/nearby",
+        "variant/include",
+        "variant/googletest/include",
     ],
     header_libs: [
         "chre_api",
@@ -1439,6 +1607,9 @@ cc_defaults {
         "-DCHRE_LARGE_PAYLOAD_MAX_SIZE=32000",
         "-DCHRE_MESSAGE_ROUTER_MAX_HOST_ENDPOINTS=8",
         "-DCHRE_MESSAGE_ROUTER_MAX_HOST_HUBS=2",
+        "-DCHRE_MESSAGE_ROUTER_MAX_MESSAGE_HUBS=6",
+        "-DCHRE_MESSAGE_ROUTER_MAX_SESSIONS=10",
+        "-DCHRE_MESSAGE_ROUTER_RESERVED_SESSION_ID=0x8000",
         "-DCHRE_MESSAGE_TO_HOST_MAX_SIZE=4096",
         "-DCHRE_MINIMUM_LOG_LEVEL=CHRE_LOG_LEVEL_DEBUG",
         "-DCHRE_PATCH_VERSION=1234",
@@ -1560,5 +1731,12 @@ filegroup {
         "platform/linux/platform_nanoapp.cc",
         "platform/linux/platform_log.cc",
         "platform/linux/platform_debug_dump_manager.cc",
+    ],
+}
+
+filegroup {
+    name: "chre_nanoapp_dso_srcs",
+    srcs: [
+        "platform/shared/nanoapp/nanoapp_support_lib_dso.cc",
     ],
 }

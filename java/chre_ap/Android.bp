@@ -14,26 +14,12 @@
 // limitations under the License.
 //
 
-// This makefile supplies the rules for building a library of JNI code for
-// use by our example of how to bundle a shared library with an APK.
-
 package {
     default_applicable_licenses: ["Android-Apache-2.0"],
 }
 
-cc_library_shared {
-    name: "libchredemojni",
-    // All of the source files that we will compile.
-    srcs: ["native.cpp"],
-    // All of the shared libraries we link against.
-    shared_libs: ["liblog"],
-    // No static libraries.
-    static_libs: [],
-    cflags: [
-        "-Wall",
-        "-Werror",
-    ],
-    header_libs: ["jni_headers"],
-    stl: "none",
-    sdk_version: "current",
+java_library {
+    name: "context-hub-ap-lib",
+    srcs: ["src/**/*.java"],
+    visibility: ["//visibility:public"],
 }

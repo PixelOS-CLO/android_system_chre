@@ -14,14 +14,18 @@
  * limitations under the License.
  */
 
-package com.google.android.chre.aptester;
+#include "chre/platform/platform_debug_dump_manager.h"
 
-public class Native {
-    static {
-        // The runtime will add "lib" on the front and ".o" on the end of
-        // the name supplied to loadLibrary.
-        System.loadLibrary("chredemojni");
-    }
+namespace chre {
 
-    static native int add(int a, int b);
-}
+PlatformDebugDumpManagerBase::PlatformDebugDumpManagerBase() {}
+
+PlatformDebugDumpManagerBase::~PlatformDebugDumpManagerBase() {}
+
+void PlatformDebugDumpManager::sendDebugDump(const char * /*debugStr*/,
+                                             bool /*complete*/) {}
+
+void PlatformDebugDumpManager::logStateToBuffer(
+    DebugDumpWrapper & /* debugDump */) {}
+
+}  // namespace chre
