@@ -24,6 +24,7 @@ COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_containers/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_function/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_intrusive_ptr/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_log/public
+COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_multibuf/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_numeric/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_polyfill/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_preprocessor/public
@@ -55,6 +56,7 @@ COMMON_SRCS += $(CHRE_PREFIX)/util/system/ble_util.cc
 COMMON_SRCS += $(CHRE_PREFIX)/util/system/error_util.cc
 COMMON_SRCS += $(CHRE_PREFIX)/util/system/event_callbacks.cc
 COMMON_SRCS += $(CHRE_PREFIX)/util/system/debug_dump.cc
+COMMON_SRCS += $(CHRE_PREFIX)/util/system/message_hub.cc
 COMMON_SRCS += $(CHRE_PREFIX)/util/system/message_router.cc
 COMMON_SRCS += $(CHRE_PREFIX)/util/system/service_helpers.cc
 
@@ -93,3 +95,7 @@ GOOGLETEST_SRCS += $(CHRE_PREFIX)/util/tests/unique_ptr_test.cc
 # Pigweed Source Files #########################################################
 
 PIGWEED_UTIL_SRCS += $(CHRE_PREFIX)/util/pigweed/chre_channel_output.cc
+PIGWEED_UTIL_SRCS += $(CHRE_PREFIX)/util/pigweed/permission.cc
+PIGWEED_UTIL_SRCS += $(CHRE_PREFIX)/util/pigweed/rpc_client.cc
+PIGWEED_UTIL_SRCS += $(CHRE_PREFIX)/util/pigweed/rpc_helper.cc
+PIGWEED_UTIL_SRCS += $(CHRE_PREFIX)/util/pigweed/rpc_server.cc

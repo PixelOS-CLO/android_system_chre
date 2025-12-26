@@ -27,6 +27,8 @@ public class ContextHubAPNative {
 
     static native void destroy();
 
+    static native void runEventLoop(boolean useNativeThread);
+
     static native void nativeRegister(ContextHubAPManager instance);
 
     static native boolean loadNanoAppFromFile(String filename);
@@ -38,7 +40,7 @@ public class ContextHubAPNative {
      *
      * @return NanoAppInfo array
      */
-    public static native NanoAppInfo[] listNanoapps();
+    public static native NanoAppState[] listNanoapps();
 
     /**
      * Send message to nanoapp.
@@ -56,4 +58,7 @@ public class ContextHubAPNative {
     static void onMessageReceived(long nanoAppId, int messageType, byte[] messageBody) {
         ContextHubAPManager.getInstance().onMessageFromNanoApp(nanoAppId, messageType, messageBody);
     }
+
+    // Called when an alarm is fired.
+    static native void onAlarmFired(long timerId);
 }

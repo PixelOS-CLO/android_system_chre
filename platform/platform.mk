@@ -204,6 +204,7 @@ SIM_CFLAGS += -I$(CHRE_PREFIX)/platform/shared/public_platform_debug_dump_manage
 SIM_CFLAGS += -I$(CHRE_PREFIX)/platform/shared/public_platform_gnss_pal
 SIM_CFLAGS += -I$(CHRE_PREFIX)/platform/shared/public_platform_wifi_pal
 SIM_CFLAGS += -I$(CHRE_PREFIX)/platform/shared/public_platform_wwan_pal
+SIM_CFLAGS += -I$(CHRE_PREFIX)/platform/shared/public_std_atomic
 SIM_CFLAGS += -Iplatform/linux/sim/include
 
 # Simulator-specific Source Files ##############################################
@@ -285,6 +286,7 @@ endif
 
 # Linux-specific Compiler Flags ################################################
 
+GOOGLE_X86_LINUX_CFLAGS += -Iplatform/shared/public_std_atomic
 GOOGLE_X86_LINUX_CFLAGS += -Iplatform/linux/include
 
 # Linux-specific Source Files ##################################################
@@ -321,6 +323,7 @@ GOOGLE_ARM64_ANDROID_CFLAGS += -Ihost/common/include
 
 # Also add the linux sources to fall back to the default Linux implementation.
 GOOGLE_ARM64_ANDROID_CFLAGS += -Iplatform/linux/include
+GOOGLE_ARM64_ANDROID_CFLAGS += -Iplatform/shared/public_std_atomic
 GOOGLE_ARM64_ANDROID_CFLAGS += -Iplatform/shared/fbs/include
 
 # We use FlatBuffers in the Android simulator
@@ -520,6 +523,7 @@ TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/nanoapp_loader.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/pal_system_api.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/platform_debug_dump_manager.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/system_time.cc
+TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/tokenized_log.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/version.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/nanoapp/nanoapp_dso_util.cc
 TINYSYS_SRCS += $(MBEDTLS_SRCS)

@@ -24,7 +24,6 @@
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -37,6 +36,7 @@ class PlatformSensorManagerBase {
  protected:
   ASensorManager *mSensorManager = nullptr;
   ASensorEventQueue *mSharedEventQueue = nullptr;
+  ALooper *mLooper = nullptr;
 
   // The context containing all sensor
   struct SensorContext {
@@ -53,26 +53,20 @@ class PlatformSensorManagerBase {
   // Map from Android sensor handle to the index in mSensorContextArray.
   std::unordered_map<int32_t, uint32_t> mAndroidHandleToChreHandleMap;
 
-  // Looper instance and thread.
-  ALooper *mLooper = nullptr;
-  std::thread mLooperThread;
-  std::atomic<bool> mIsLooperRunning{false};
-
-  // Used for Looper initialization sync.
-  std::mutex mLooperMutex;
-  std::condition_variable mLooperCondVar;
-  bool mLooperReady = false;
-
   // Looper callback function.
   static int looperCallback(int fd, int events, void *data);
 
   // The struct used to store the CHRE event returned when processing a batch of
   // sensor events.
-  struct chreEvent {
+  struct Event {
     // The real event data.
-    void *event = nullptr;
+    union {
+      void *data = nullptr;  // Used for accessing void* type of this union.
+      chreSensorThreeAxisData *threeAxisData;
+      chreSensorFloatData *floatData;
+    };
     // Context of the sensor that this event belongs to.
-    struct SensorContext *context;
+    struct SensorContext *context = nullptr;
     // The data sample size in the chre event.
     size_t dataSize = 0;
     // The index used to fill in the chre event.
@@ -80,11 +74,8 @@ class PlatformSensorManagerBase {
   };
 
   static void fillAccelerometerEvent(const ASensorEvent &event,
-                                     chreEvent &chreEvent,
-                                     struct chreSensorThreeAxisData **pEvent);
-  static void fillBarometerEvent(const ASensorEvent &event,
-                                 chreEvent &chreEvent,
-                                 struct chreSensorFloatData **pEvent);
+                                     Event &chreEvent);
+  static void fillBarometerEvent(const ASensorEvent &event, Event &chreEvent);
 };
 
 }  // namespace chre

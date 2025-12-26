@@ -20,11 +20,11 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "pw_allocator/allocator.h"
 #include "pw_bytes/span.h"
 #include "pw_function/function.h"
-#include "pw_span/span.h"
 
-namespace chre::shmem_spmc_queue {
+namespace android::contexthub::data_flow {
 
 /** Sends a notification to an endpoint within the same "process". */
 using LocalNotifyFn = void (*)(void *context);
@@ -61,4 +61,15 @@ enum class OverwritePolicy : uint8_t {
   kMask = 0xf << 4,        // Mask for extracting overwrite policy bits.
 };
 
-}  // namespace chre::shmem_spmc_queue
+/** Represents a shared memory region. */
+struct Region {
+  uintptr_t base;
+  uint32_t size;
+};
+
+/** Represents a shared memory region that can be allocated from. */
+struct AllocatorRegion : public Region {
+  pw::Allocator *allocator;
+};
+
+}  // namespace android::contexthub::data_flow

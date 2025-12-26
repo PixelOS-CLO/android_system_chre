@@ -290,7 +290,6 @@ COMMON_SRCS += $(PIGWEED_DIR)/pw_rpc/pwpb/server_reader_writer.cc
 COMMON_SRCS += $(PIGWEED_DIR)/pw_status/status.cc
 COMMON_SRCS += $(PIGWEED_DIR)/pw_stream/memory_stream.cc
 COMMON_SRCS += $(PIGWEED_DIR)/pw_varint/stream.cc
-COMMON_SRCS += $(PIGWEED_DIR)/pw_varint/varint_c.c
 COMMON_SRCS += $(PIGWEED_DIR)/pw_varint/varint.cc
 # Pigweed configuration
 COMMON_CFLAGS += -DPW_RPC_USE_GLOBAL_MUTEX=0
@@ -306,6 +305,7 @@ COMMON_CFLAGS += -DPW_RPC_DYNAMIC_CONTAINER_INCLUDE='"chre/util/dynamic_vector.h
 
 # Add CHRE Pigweed util sources since nanoapps should always use these
 COMMON_SRCS += $(PIGWEED_CHRE_UTIL_DIR)/chre_channel_output.cc
+COMMON_SRCS += $(PIGWEED_CHRE_UTIL_DIR)/permission.cc
 COMMON_SRCS += $(PIGWEED_CHRE_UTIL_DIR)/rpc_client.cc
 COMMON_SRCS += $(PIGWEED_CHRE_UTIL_DIR)/rpc_helper.cc
 COMMON_SRCS += $(PIGWEED_CHRE_UTIL_DIR)/rpc_server.cc

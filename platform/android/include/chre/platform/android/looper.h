@@ -14,35 +14,31 @@
  * limitations under the License.
  */
 
-#ifndef CHRE_PLATFORM_ANDROID_ATOMIC_BASE_H_
-#define CHRE_PLATFORM_ANDROID_ATOMIC_BASE_H_
+#ifndef CHRE_PLATFORM_ANDROID_PLATFORM_LOOPER_H_
+#define CHRE_PLATFORM_ANDROID_PLATFORM_LOOPER_H_
 
-#include <atomic>
-
-#include "chre/variant/config.h"
+#include <android/sensor.h>
 
 namespace chre {
 
 /**
- * The CHRE AP implementation of AtomicBase.
+ * The CHRE AP NDK sensor looper class.
  */
-template <typename AtomicType>
-class AtomicBase {
+class Looper {
  public:
-  constexpr explicit AtomicBase(AtomicType startingValue)
-      : mAtomic(startingValue) {}
+  Looper() = default;
+  ~Looper() = default;
 
- protected:
-  //! The underlying std::atomic struct.
-  std::atomic<AtomicType> mAtomic;
+  /**
+   * Init a global looper, returns the looper.
+   */
+  static ALooper *init();
+
+  /**
+   * Deinit the global looper, returns the looper.
+   */
+  static void deinit();
 };
-
-typedef AtomicBase<bool> AtomicBoolBase;
-#if CHRE_ATOMIC_UINT8_ENABLED
-typedef AtomicBase<uint8_t> AtomicUint8Base;
-#endif  // CHRE_ATOMIC_UINT8_ENABLED
-typedef AtomicBase<uint32_t> AtomicUint32Base;
-
 }  // namespace chre
 
-#endif  // CHRE_PLATFORM_ANDROID_ATOMIC_BASE_H_
+#endif  // CHRE_PLATFORM_ANDROID_PLATFORM_LOG_H_

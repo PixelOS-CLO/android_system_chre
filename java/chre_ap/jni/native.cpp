@@ -20,6 +20,7 @@
 #include "chre/core/static_nanoapps.h"
 #include "chre/platform/android/platform_log.h"
 #include "chre/platform/shared/init.h"
+#include "chre/platform/system_timer.h"
 
 #include <android/log_macros.h>
 
@@ -31,17 +32,20 @@
 
 // Global thread to run CHRE event loop.
 std::unique_ptr<std::thread> chreThread = nullptr;
+bool g_chre_initialized = false;
 
 static JavaVM *g_javaVM = nullptr;
 static jobject g_contextHubAPManagerInstance = nullptr;
 static jmethodID g_onMessageMethodID = nullptr;
+static jclass g_alarmBridgeClass = nullptr;
+static jmethodID g_setAlarmMethod = nullptr;
+static jmethodID g_cancelAlarmMethod = nullptr;
 
 void messageCallback(int64_t nanoAppId, int32_t messageType, void *messageBody,
                      size_t messageBodyLen) {
-  ALOGD(
-      "Received nanoapp message, nanoAppid: %ld, messageType: %d, "
-      "message: %p, length: %lu",
-      nanoAppId, messageType, messageBody, messageBodyLen);
+  ALOGD("Received nanoapp message, nanoAppid: %" PRId64
+        ", messageType: %" PRId32 ", message: %p, length: %zu",
+        nanoAppId, messageType, messageBody, messageBodyLen);
 
   if (!g_javaVM || !g_contextHubAPManagerInstance || !g_onMessageMethodID) {
     ALOGE("JNI environment not ready to call Java method.");
@@ -69,44 +73,112 @@ void messageCallback(int64_t nanoAppId, int32_t messageType, void *messageBody,
   }
 
   env->DeleteLocalRef(messagePayload);
-  g_javaVM->DetachCurrentThread();
+
+  if (chreThread) {
+    g_javaVM->DetachCurrentThread();
+  }
+}
+
+void chreApSetAlarm(uint64_t timerId, uint64_t delayNs) {
+  if (g_javaVM == nullptr || g_alarmBridgeClass == nullptr ||
+      g_setAlarmMethod == nullptr) {
+    ALOGE("JNI not initialized for setAlarm");
+    return;
+  }
+
+  JNIEnv *env;
+  jint attachResult = g_javaVM->AttachCurrentThread(&env, nullptr);
+  if (attachResult != JNI_OK) {
+    ALOGE("Failed to attach current thread to JVM.");
+    return;
+  }
+
+  uint64_t delayMs = delayNs / 1000000;
+  env->CallStaticVoidMethod(g_alarmBridgeClass, g_setAlarmMethod,
+                            (jlong)timerId, (jlong)delayMs);
+
+  if (chreThread) {
+    g_javaVM->DetachCurrentThread();
+  }
+}
+
+void chreApCancelAlarm(uint64_t timerId) {
+  if (g_javaVM == nullptr || g_alarmBridgeClass == nullptr ||
+      g_setAlarmMethod == nullptr) {
+    ALOGE("JNI not initialized for setAlarm");
+    return;
+  }
+
+  JNIEnv *env;
+  jint attachResult = g_javaVM->AttachCurrentThread(&env, nullptr);
+  if (attachResult != JNI_OK) {
+    ALOGE("Failed to attach current thread to JVM.");
+    return;
+  }
+
+  env->CallStaticVoidMethod(g_alarmBridgeClass, g_cancelAlarmMethod,
+                            (jlong)timerId);
+
+  if (chreThread) {
+    g_javaVM->DetachCurrentThread();
+  }
+}
+
+void onAlarmFired(JNIEnv /**env*/, jclass /*clazz*/, jlong timerId) {
+  chre::SystemTimerBase::systemTimerNotifyCallback(
+      {.sival_ptr = (void *)timerId});
 }
 
 static jint init(JNIEnv * /*env*/, jobject /*thiz*/) {
-  if (chreThread != nullptr) {
+  if (g_chre_initialized) {
     ALOGE("Environment already initialized");
     return 0;
   }
   // Initialize the system.
   chre::initCommon();
-
-  chreThread = std::make_unique<std::thread>([&]() {
-    chre::EventLoopManagerSingleton::get()->lateInit();
-
-    chre::EventLoopManagerSingleton::get()
-        ->getHostCommsManager()
-        .registerMessageCallback(messageCallback);
-    ALOGD("message callback function registered.");
-
-    // Load static nanoapps unless they are disabled by a command-line flag.
-    chre::loadStaticNanoapps();
-    ALOGD("%zu nanoapps loaded", chre::EventLoopManagerSingleton::get()
-                                     ->getEventLoop()
-                                     .getNanoappCount());
-
-    chre::EventLoopManagerSingleton::get()->getEventLoop().run();
-  });
-
+  chre::EventLoopManagerSingleton::get()->lateInit();
+  chre::EventLoopManagerSingleton::get()
+      ->getHostCommsManager()
+      .registerMessageCallback(messageCallback);
+  ALOGD("message callback function registered.");
+  g_chre_initialized = true;
   return 0;
 }
 
+static void run() {
+  // Load static nanoapps unless they are disabled by a command-line flag.
+  chre::loadStaticNanoapps();
+  ALOGD(
+      "%zu nanoapps loaded",
+      chre::EventLoopManagerSingleton::get()->getEventLoop().getNanoappCount());
+  chre::EventLoopManagerSingleton::get()->getEventLoop().run();
+}
+
+static void runEventLoop(JNIEnv * /*env*/, jobject /*thiz*/,
+                         jboolean useNativeThread) {
+  if (!g_chre_initialized) {
+    ALOGE("Environment not initialized");
+    return;
+  }
+  if (useNativeThread) {
+    chreThread = std::make_unique<std::thread>(run);
+  } else {
+    run();
+  }
+}
+
 static void destroy(JNIEnv * /*env*/, jobject /*thiz*/) {
+  if (!g_chre_initialized) {
+    ALOGE("Environment not initialized");
+    return;
+  }
   chre::EventLoopManagerSingleton::get()->getEventLoop().stop();
   if (chreThread != nullptr) {
     chreThread->join();
+    chreThread.reset();
   }
-  chreThread.reset();
   chre::deinitCommon();
+  g_chre_initialized = false;
   ALOGD("Environment destroyed");
 }
 
@@ -147,7 +219,7 @@ static jobjectArray listNanoapps(JNIEnv *env, jclass /*clazz*/) {
   chre::EventLoopManagerSingleton::get()->getEventLoop().forEachNanoapp(
       nanoappCallback, &nanoappInfoList);
 
-  const char *nanoAppInfoClassName = "com/google/android/chre/ap/NanoAppInfo";
+  const char *nanoAppInfoClassName = "com/google/android/chre/ap/NanoAppState";
   jclass nanoAppInfoClass = env->FindClass(nanoAppInfoClassName);
   if (nanoAppInfoClass == nullptr) {
     ALOGE("Failed to find class '%s'", nanoAppInfoClassName);
@@ -156,7 +228,7 @@ static jobjectArray listNanoapps(JNIEnv *env, jclass /*clazz*/) {
 
   jmethodID constructor = env->GetMethodID(nanoAppInfoClass, "<init>", "()V");
   jfieldID instanceIdField =
-      env->GetFieldID(nanoAppInfoClass, "mInstanceId", "J");
+      env->GetFieldID(nanoAppInfoClass, "mNanoAppId", "J");
   jfieldID nameField =
       env->GetFieldID(nanoAppInfoClass, "mName", "Ljava/lang/String;");
 
@@ -193,17 +265,63 @@ static jobjectArray listNanoapps(JNIEnv *env, jclass /*clazz*/) {
   return nanoAppArray;
 }
 
+static void nativeRegister(JNIEnv *env, jobject, jobject instance) {
+  if (g_contextHubAPManagerInstance != nullptr) {
+    env->DeleteGlobalRef(g_contextHubAPManagerInstance);
+  }
+  g_contextHubAPManagerInstance = env->NewGlobalRef(instance);
+  if (g_contextHubAPManagerInstance == nullptr) {
+    ALOGE("Failed to create global reference for ContextHubAPManager.");
+    return;
+  }
+
+  jclass managerClass = env->GetObjectClass(instance);
+  if (managerClass == nullptr) {
+    ALOGE("Failed to find class for ContextHubAPManager.");
+    return;
+  }
+  g_onMessageMethodID =
+      env->GetMethodID(managerClass, "onMessageFromNanoApp", "(JI[B)V");
+  if (g_onMessageMethodID == nullptr) {
+    ALOGE("Failed to find method 'onMessageFromNanoApp'.");
+  } else {
+    ALOGI("Successfully cached ContextHubAPManager instance and method ID.");
+  }
+  env->DeleteLocalRef(managerClass);
+
+  jclass bridgeClass =
+      env->FindClass("com/google/android/chre/ap/AlarmManagerBridge");
+  if (bridgeClass == nullptr) {
+    ALOGE("Failed to find class 'AlarmManagerBridge'.");
+    return;
+  }
+  g_alarmBridgeClass = (jclass)env->NewGlobalRef(bridgeClass);
+  g_setAlarmMethod =
+      env->GetStaticMethodID(g_alarmBridgeClass, "setAlarm", "(JJ)V");
+  g_cancelAlarmMethod =
+      env->GetStaticMethodID(g_alarmBridgeClass, "cancelAlarm", "(J)V");
+
+  if (g_setAlarmMethod == nullptr || g_cancelAlarmMethod == nullptr) {
+    ALOGE("Failed to find methods 'setAlarm' or 'cancelAlarm'.");
+  }
+}
+
 static JNINativeMethod methods[] = {
-    {"init", "()I", (void *)init},
-    {"destroy", "()V", (void *)destroy},
-    {"loadNanoAppFromFile",
-     ""
-     "(Ljava/lang/String;)Z",
+    {(char *)"init", (char *)"()I", (void *)init},
+    {(char *)"destroy", (char *)"()V", (void *)destroy},
+    {(char *)"runEventLoop", (char *)"(Z)V", (void *)runEventLoop},
+    {(char *)"loadNanoAppFromFile", (char *)"(Ljava/lang/String;)Z",
      (void *)loadNanoAppFromFile},
-    {"unloadNanoApp", "(J)Z", (void *)unloadNanoApp},
-    {"listNanoapps", "()[Lcom/google/android/chre/ap/NanoAppInfo;",
+    {(char *)"unloadNanoApp", (char *)"(J)Z", (void *)unloadNanoApp},
+    {(char *)"listNanoapps",
+     (char *)"()[Lcom/google/android/chre/ap/NanoAppState;",
      (void *)listNanoapps},
-    {"sendMessage", "(JI[BI)Z", (void *)sendMessage}};
+    {(char *)"sendMessage", (char *)"(JI[BI)Z", (void *)sendMessage},
+    {(char *)"nativeRegister",
+     (char *)"(Lcom/google/android/chre/ap/ContextHubAPManager;)V",
+     (void *)nativeRegister},
+    {(char *)"onAlarmFired", (char *)"(J)V", (void *)onAlarmFired},
+};
 
 // Register native methods for all classes we know about.
 static const char *classPathName =
@@ -249,34 +367,4 @@ jint JNI_OnLoad(JavaVM *vm, void * /*reserved*/) {
   }
 
   return JNI_VERSION_1_6;
-}
-
-extern "C" JNIEXPORT void JNICALL
-Java_com_google_android_chre_ap_ContextHubAPNative_nativeRegister(
-    JNIEnv *env, jobject, jobject instance) {
-  if (g_contextHubAPManagerInstance != nullptr) {
-    env->DeleteGlobalRef(g_contextHubAPManagerInstance);
-  }
-  g_contextHubAPManagerInstance = env->NewGlobalRef(instance);
-  if (g_contextHubAPManagerInstance == nullptr) {
-    ALOGE("Failed to create global reference for ContextHubAPManager.");
-    return;
-  }
-
-  jclass managerClass = env->GetObjectClass(instance);
-  if (managerClass == nullptr) {
-    ALOGE("Failed to find class for ContextHubAPManager.");
-    return;
-  }
-
-  g_onMessageMethodID =
-      env->GetMethodID(managerClass, "onMessageFromNanoApp", "(JI[B)V");
-
-  if (g_onMessageMethodID == nullptr) {
-    ALOGE("Failed to find method 'onMessageFromNanoApp'.");
-  } else {
-    ALOGI("Successfully cached ContextHubAPManager instance and method ID.");
-  }
-
-  env->DeleteLocalRef(managerClass);
 }

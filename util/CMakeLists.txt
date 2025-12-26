@@ -161,6 +161,7 @@ pw_add_library(chre.util.pigweed STATIC
     pw_span
   SOURCES
     pigweed/chre_channel_output.cc
+    pigweed/permission.cc
     pigweed/rpc_client.cc
     pigweed/rpc_helper.cc
     pigweed/rpc_server.cc
@@ -215,6 +216,7 @@ pw_add_library(chre.util.system STATIC
     system/error_util.cc
     system/event_callbacks.cc
     system/debug_dump.cc
+    system/message_hub.cc
     system/message_router.cc
     system/service_helpers.cc
   PRIVATE_DEPS

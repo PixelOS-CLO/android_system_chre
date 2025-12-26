@@ -14,9 +14,23 @@
  * limitations under the License.
  */
 
-package com.google.android.chre.ap;
+#include "chre/util/pigweed/permission.h"
 
-public class NanoAppInfo {
-    public long mInstanceId;
-    public String mName;
+#include "chre/util/nanoapp/assert.h"
+#include "chre_api/chre.h"
+
+namespace chre {
+
+void RpcPermission::set(uint32_t permission) {
+  mPermission = permission;
 }
+
+uint32_t RpcPermission::getAndReset() {
+  CHRE_ASSERT(mPermission.has_value());
+  uint32_t permission = mPermission.has_value() ? mPermission.value()
+                                                : CHRE_MESSAGE_PERMISSION_NONE;
+  mPermission.reset();
+  return permission;
+}
+
+}  // namespace chre

@@ -16,26 +16,12 @@
 
 package com.google.android.chre.ap;
 
-import android.annotation.CallbackExecutor;
-import android.annotation.NonNull;
 import android.annotation.Nullable;
 import android.content.Context;
-import android.hardware.contexthub.HubDiscoveryInfo;
-import android.hardware.contexthub.HubEndpoint;
-import android.hardware.contexthub.HubEndpointDiscoveryCallback;
-import android.hardware.contexthub.HubEndpointInfo;
-import android.hardware.location.ContextHubClientCallback;
-import android.hardware.location.ContextHubInfo;
-import android.hardware.location.ContextHubTransaction;
-import android.hardware.location.HubInfo;
-import android.hardware.location.NanoAppMessage;
-import android.hardware.location.NanoAppState;
 import android.os.Handler;
-import android.os.HandlerExecutor;
 import android.os.Looper;
 import android.util.Log;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
@@ -60,6 +46,8 @@ public final class ContextHubAPManager implements ContextHubManagerInterface {
 
     private final AtomicInteger mClientIdCounter = new AtomicInteger(0);
 
+    private Thread mEventLoopThread = null;
+
     // One nano app should have only one client created.
     private final ConcurrentHashMap<Integer, ContextHubAPClient> mClientMap =
             new ConcurrentHashMap<Integer, ContextHubAPClient>();
@@ -72,7 +60,6 @@ public final class ContextHubAPManager implements ContextHubManagerInterface {
      *
      * @return The instance of ContextHubAPManager.
      */
-    @NonNull
     public static ContextHubAPManager getInstance() {
         if (sInstance == null) {
             synchronized (ContextHubAPManager.class) {
@@ -89,7 +76,7 @@ public final class ContextHubAPManager implements ContextHubManagerInterface {
      *
      * @throws RuntimeException if the initialization fails.
      */
-    public void init() {
+    public void init(Context appContext) {
         // Init the CHRE AP environment
         int initRes = ContextHubAPNative.init();
         if (initRes != 0) {
@@ -97,16 +84,42 @@ public final class ContextHubAPManager implements ContextHubManagerInterface {
             throw new RuntimeException("CHRE AP environment initialization failed.");
         }
         ContextHubAPNative.nativeRegister(this);
+        AlarmManagerBridge.initialize(appContext);
         Log.i(TAG, "ContextHubAPManager initialized successfully.");
     }
 
     /**
-     * Destroys the CHRE AP environment.
+     * Runs the event loop of the CHRE AP environment.
+     *
+     * @param useNativeThread Whether to use a native thread to run the event loop. If false, the
+     *                        event loop will run on the calling thread.
      */
-    public void destroy() {
-        ContextHubAPNative.destroy();
+    public void runEventLoop(boolean useNativeThread) {
+        ContextHubAPNative.runEventLoop(useNativeThread);
     }
 
+    /** Destroys the CHRE AP environment. */
+    public void destroy() {
+        ContextHubAPNative.destroy();
+
+        if (mEventLoopThread != null) {
+            mEventLoopThread.interrupt();
+            try {
+                mEventLoopThread.join();
+            } catch (InterruptedException e) {
+                Log.e(TAG, "Failed to join event loop thread: " + e);
+            }
+            mEventLoopThread = null;
+        }
+    }
+
+    /**
+     * If set, indicate the event loop is run on this thread. ContextHubAPManager will join the
+     * thread up on destroy.
+     */
+    public void setEventLoopThread(@Nullable Thread eventLoopThread) {
+        mEventLoopThread = eventLoopThread;
+    }
 
     /**
      * Creates and registers a client to communicate with a simulated nanoapp.
@@ -116,15 +129,12 @@ public final class ContextHubAPManager implements ContextHubManagerInterface {
      * @param callback The callback to receive messages and events from the nanoapp.
      * @return The ContextHubClient instance.
      */
-    @NonNull
     @Override
     public ContextHubClientInterface createClient(
             @Nullable Context context,
-            @NonNull ContextHubInfo hubInfo,
-            @NonNull @CallbackExecutor Executor executor,
-            @NonNull ContextHubClientCallback callback) {
+            Executor executor,
+            ContextHubClientCallback callback) {
         Objects.requireNonNull(callback, "Callback cannot be null");
-        Objects.requireNonNull(hubInfo, "ContextHubInfo cannot be null");
         Objects.requireNonNull(executor, "Executor cannot be null");
         var clientId = mClientIdCounter.incrementAndGet();
         var client = new ContextHubAPClient(clientId, executor, callback);
@@ -132,21 +142,15 @@ public final class ContextHubAPManager implements ContextHubManagerInterface {
         return client;
     }
 
-    @NonNull
     @Override
     public ContextHubClientInterface createClient(
-            @NonNull ContextHubInfo hubInfo,
-            @NonNull ContextHubClientCallback callback,
-            @NonNull @CallbackExecutor Executor executor) {
-        return createClient(null /* context */, hubInfo, executor, callback);
+            ContextHubClientCallback callback, Executor executor) {
+        return createClient(null /* context */, executor, callback);
     }
 
-    @NonNull
     @Override
-    public ContextHubClientInterface createClient(
-            @NonNull ContextHubInfo hubInfo, @NonNull ContextHubClientCallback callback) {
-        return createClient(
-                null /* context */, hubInfo, new HandlerExecutor(mMainHandler), callback);
+    public ContextHubClientInterface createClient(ContextHubClientCallback callback) {
+        return createClient(null /* context */, new HandlerExecutor(mMainHandler), callback);
     }
 
     /**
@@ -172,10 +176,8 @@ public final class ContextHubAPManager implements ContextHubManagerInterface {
         return success;
     }
 
-    @NonNull
     @Override
-    public ContextHubTransaction<Void> unloadNanoApp(
-            @NonNull ContextHubInfo hubInfo, long nanoAppInstanceId) {
+    public ContextHubTransaction<Void> unloadNanoApp(long nanoAppInstanceId) {
         boolean unloadRes = ContextHubAPNative.unloadNanoApp(nanoAppInstanceId);
         if (!unloadRes) {
             Log.d(TAG, "Unload nano app failed for instance id: " + nanoAppInstanceId);
@@ -191,16 +193,11 @@ public final class ContextHubAPManager implements ContextHubManagerInterface {
         return transaction;
     }
 
-    @NonNull
     @Override
-    public ContextHubTransaction<List<NanoAppState>> queryNanoApps(
-            @NonNull ContextHubInfo hubInfo) {
+    public ContextHubTransaction<List<NanoAppState>> queryNanoApps() {
         // Not implemented for AP environment
         ContextHubTransaction<List<NanoAppState>> transaction =
                 new ContextHubTransaction<>(ContextHubTransaction.TYPE_QUERY_NANOAPPS);
-        transaction.setResponse(
-                new ContextHubTransaction.Response<>(
-                        ContextHubTransaction.RESULT_SUCCESS, new ArrayList<NanoAppState>()));
         return transaction;
     }
 
@@ -214,122 +211,27 @@ public final class ContextHubAPManager implements ContextHubManagerInterface {
      */
     public void onMessageFromNanoApp(long nanoAppId, int messageType, byte[] messageBody) {
         var message =
-                NanoAppMessage.createMessageFromNanoApp(
-                        nanoAppId, messageType, messageBody, false, false, 0);
+                NanoAppMessage.createMessageFromNanoApp(nanoAppId, messageType, messageBody, false);
         Log.d(TAG, "Message received for NanoApp ID: " + nanoAppId);
         mMainHandler.post(
                 () -> {
                     for (ContextHubAPClient client : mClientMap.values()) {
-                        Executor exec = client.getExecutor();
-                        if (exec != null) {
-                            exec.execute(
-                                    new Runnable() {
-                                        @Override
-                                        public void run() {
-                                            client.getCallback()
-                                                    .onMessageFromNanoApp(null, message);
-                                        }
-                                    });
-                        } else {
-                            client.getCallback().onMessageFromNanoApp(null, message);
-                        }
+                        client.getExecutor()
+                                .execute(
+                                        new Runnable() {
+                                            @Override
+                                            public void run() {
+                                                client.getCallback()
+                                                        .onMessageFromNanoApp(null, message);
+                                            }
+                                        });
                     }
                 });
     }
 
-    @NonNull
     @Override
-    public List<HubDiscoveryInfo> findEndpoints(long endpointId) {
-        // Not implemented for AP environment
-        return new ArrayList<>();
-    }
-
-    @NonNull
-    @Override
-    public List<HubDiscoveryInfo> findEndpoints(@NonNull String serviceDescriptor) {
-        // Not implemented for AP environment
-        return new ArrayList<>();
-    }
-
-    @NonNull
-    @Override
-    public List<ContextHubInfo> getContextHubs() {
-        // Not implemented for AP environment
-        return new ArrayList<>();
-    }
-
-    @NonNull
-    @Override
-    public List<HubInfo> getHubs() {
-        // Not implemented for AP environment
-        return new ArrayList<>();
-    }
-
-    @NonNull
-    @Override
-    public long[] getPreloadedNanoAppIds(@NonNull ContextHubInfo hubInfo) {
+    public long[] getPreloadedNanoAppIds() {
         // Not implemented for AP environment
         return new long[0];
-    }
-
-    @Override
-    public void openSession(
-            @NonNull HubEndpoint hubEndpoint, @NonNull HubEndpointInfo destination) {
-        // Not implemented for AP environment
-    }
-
-    @Override
-    public void openSession(
-            @NonNull HubEndpoint hubEndpoint,
-            @NonNull HubEndpointInfo destination,
-            @NonNull String serviceDescriptor) {
-        // Not implemented for AP environment
-    }
-
-    @Override
-    public void registerEndpoint(@NonNull HubEndpoint hubEndpoint) {
-        // Not implemented for AP environment
-    }
-
-    @Override
-    public void registerEndpointDiscoveryCallback(
-            @NonNull HubEndpointDiscoveryCallback callback, long endpointId) {
-        // Not implemented for AP environment
-    }
-
-    @Override
-    public void registerEndpointDiscoveryCallback(
-            @NonNull Executor executor,
-            @NonNull HubEndpointDiscoveryCallback callback,
-            long endpointId) {
-        // Not implemented for AP environment
-
-    }
-
-    /** Registers a callback for an endpoint identified by a service descriptor. */
-    @Override
-    public void registerEndpointDiscoveryCallback(
-            @NonNull HubEndpointDiscoveryCallback callback, @NonNull String serviceDescriptor) {
-        // Not implemented for AP environment
-
-    }
-
-    @Override
-    public void registerEndpointDiscoveryCallback(
-            @NonNull Executor executor,
-            @NonNull HubEndpointDiscoveryCallback callback,
-            @NonNull String serviceDescriptor) {
-        // Not implemented for AP environment
-    }
-
-    @Override
-    public void unregisterEndpoint(@NonNull HubEndpoint hubEndpoint) {
-        // Not implemented for AP environment
-    }
-
-    @Override
-    public void unregisterEndpointDiscoveryCallback(
-            @NonNull HubEndpointDiscoveryCallback callback) {
-        // Not implemented for AP environment
     }
 }
