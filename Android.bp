@@ -1020,8 +1020,10 @@ cc_library_static {
     srcs: [
         "variant/android/static_nanoapps.cc",
         "core/static_nanoapps.cc",
-        "apps/sensor_world/sensor_world.cc",
-        "apps/message_world/message_world.cc",
+        // Uncomment these apps for testing.
+        // "apps/sensor_world/sensor_world.cc",
+        // "apps/message_world/message_world.cc",
+        // "apps/wwan_world/wwan_world.cc",
     ],
     local_include_dirs: [
         "apps/include",
@@ -1049,6 +1051,7 @@ cc_defaults {
         "platform/android/context.cc",
         "platform/android/fatal_error.cc",
         "platform/android/host_link.cc",
+        "platform/android/jni_manager.cc",
         "platform/android/memory.cc",
         "platform/android/memory_manager.cc",
         "platform/android/platform_sensor.cc",
@@ -1056,9 +1059,9 @@ cc_defaults {
         "platform/android/platform_debug_dump_manager.cc",
         "platform/android/platform_log.cc",
         "platform/android/platform_nanoapp.cc",
+        "platform/android/platform_wwan.cc",
         "platform/android/power_control_manager.cc",
         "platform/android/system_time.cc",
-        "platform/android/system_timer.cc",
         "platform/shared/assert.cc",
         "platform/shared/chre_api_audio.cc",
         "platform/shared/chre_api_ble.cc",
@@ -1102,6 +1105,7 @@ cc_defaults {
     ],
     header_libs: [
         "chre_api",
+        "jni_headers",
     ],
     defaults: [
         "chre_android_common_cflags",
@@ -1128,6 +1132,7 @@ cc_defaults {
         "libbase",
         "liblog",
     ],
+    min_sdk_version: "23",
 }
 
 // For running as a standalone binary.
@@ -1157,6 +1162,7 @@ cc_defaults {
         "-DCHRE_ASSERTIONS_ENABLED=true",
         "-DCHRE_RELIABLE_MESSAGE_SUPPORT_ENABLED",
         "-DCHRE_SENSORS_SUPPORT_ENABLED",
+        "-DCHRE_WWAN_SUPPORT_ENABLED",
         // Other common flags.
         "-DCHRE_FILENAME=__FILE__",
         "-DCHRE_FIRST_SUPPORTED_API_VERSION=CHRE_API_VERSION_1_1",
@@ -1403,86 +1409,13 @@ cc_library_static {
 }
 
 cc_library_static {
-    name: "chre_integration_lib",
+    name: "chre_linux_nanoapp_unit_test",
     srcs: [
-        "test/integration/location/lbs/contexthub/test_suite/integration/chre_integration_lib.cc",
-        "test/integration/location/lbs/contexthub/test_suite/integration/platform/simulator.cc",
-        "test/integration/location/lbs/contexthub/test_suite/integration/data_feed/data_feed_base.cc",
-        "test/integration/location/lbs/contexthub/test_suite/integration/data_feed/safe_chre_structs.cc",
-        "test/integration/location/lbs/contexthub/test_suite/integration/data_feed/fragment.cc",
-        "test/integration/location/lbs/contexthub/test_suite/integration/verify/verification_data.cc",
+        "core/*.cc",
+        "platform/linux/*.cc",
+        "platform/shared/**/*.cc",
     ],
     export_include_dirs: [
-        "core/include",
-        "platform/include",
-        "platform/linux/include",
-        "test",
-        "test/integration",
-        "test/integration/location/lbs/contexthub/test_suite/integration",
-        "util/include",
-        "platform/shared/include",
-        "platform/shared/audio_pal/include",
-        "pal/include",
-        "pal/util/include",
-        "platform/shared/public_platform_ble_pal",
-        "platform/shared/public_platform_bt_socket_pal",
-        "platform/shared/public_platform_debug_dump_manager",
-        "platform/shared/public_platform_gnss_pal",
-        "platform/shared/sensor_pal/include",
-        "platform/shared/public_platform_wifi_pal",
-        "variant/include",
-        "variant/googletest/include",
-    ],
-    include_dirs: [
-        "external/abseil-cpp/",
-    ],
-    header_libs: [
-        "chre_api",
-        "chre_flatbuffers",
-        "emboss_runtime_headers",
-        "pw_bluetooth_emboss_group",
-    ],
-    defaults: [
-        "chre_linux_integration_cflags",
-    ],
-    static_libs: [
-        "absl_container_flat_hash_set",
-        "absl_flags_flag",
-        "chre_linux_integration",
-        "event_logger",
-        "libgtest",
-        "libgtest_main",
-        "libsndfile",
-        "pw_bluetooth_proxy",
-        "pw_intrusive_ptr",
-    ],
-    vendor: true,
-    shared_libs: [
-        "liblog",
-        "libutils",
-        "libbase",
-    ],
-    host_supported: true,
-}
-
-cc_library_static {
-    name: "chre_linux_integration",
-    vendor: true,
-    srcs: [
-        ":chre_linux_common_srcs",
-        "core/static_nanoapps.cc",
-        "test/integration/location/lbs/contexthub/test_suite/integration/platform/*.cc",
-    ],
-    include_dirs: [
-        "external/abseil-cpp/",
-    ],
-    exclude_srcs: [
-        "util/tests/**/*",
-        "platform/shared/platform_bt_socket.cc",
-        "test/integration/location/lbs/contexthub/test_suite/integration/platform/simulator_test.cc",
-    ],
-    export_include_dirs: [
-        "apps/nearby",
         "chre_api/include",
         "chre_api/include/chre_api",
         "core/include",
@@ -1503,10 +1436,38 @@ cc_library_static {
         "platform/shared/public_std_atomic",
         "platform/shared/sensor_pal/include",
         "util/include",
-        "test",
-        "test/integration",
         "variant/include",
         "variant/googletest/include",
+    ],
+    exclude_srcs: [
+        "util/tests/**/*",
+        "core/telemetry_manager.cc",
+        "platform/shared/audio_pal/platform_audio.cc",
+        "platform/shared/chre_api_*.cc",
+        "platform/shared/dlfcn.cc",
+        "platform/shared/dram_vote_client.cc",
+        "platform/shared/host_link.cc",
+        "platform/shared/host_protocol_chre.cc",
+        "platform/shared/host_protocol_common.cc",
+        "platform/shared/log_buffer.cc",
+        "platform/shared/log_buffer_manager.cc",
+        "platform/shared/log_common.cc",
+        "platform/shared/mbedtls/mbedtls_memory.cc",
+        "platform/shared/nanoapp_loader.cc",
+        "platform/shared/nanoapp_load_manager.cc",
+        "platform/shared/nanoapp/*.cc",
+        "platform/shared/tokenized_log.cc",
+        "platform/shared/pal_audio_stub.cc",
+        "platform/shared/pal_ble_stub.cc",
+        "platform/shared/pal_gnss_stub.cc",
+        "platform/shared/pal_wifi_stub.cc",
+        "platform/shared/pal_wwan_stub.cc",
+        "platform/shared/pal_sensor_stub.cc",
+        "platform/shared/platform_bt_socket.cc",
+        "platform/shared/platform_bt_socket_resources.cc",
+        "platform/shared/platform_debug_dump_manager.cc",
+        "platform/linux/assert.cc",
+        "platform/linux/init.cc",
     ],
     header_libs: [
         "chre_api",
@@ -1533,57 +1494,11 @@ cc_library_static {
         "pw_result",
         "pw_rpc_chre",
         "pw_status",
-        "libbase",
     ],
     shared_libs: [
         "libbase",
     ],
     host_supported: true,
-}
-
-cc_test_host {
-    name: "chre_integration_simulator_test",
-    srcs: [
-        "test/integration/location/lbs/contexthub/test_suite/integration/platform/simulator_test_static_nanoapp.cc",
-        "test/integration/location/lbs/contexthub/test_suite/integration/platform/simulator_test.cc",
-    ],
-    include_dirs: [
-        "external/abseil-cpp/",
-    ],
-    exclude_srcs: [
-        "platform/shared/platform_bt_socket.cc",
-        "util/tests/**/*",
-    ],
-    header_libs: [
-        "chre_api",
-        "chre_flatbuffers",
-        "emboss_runtime_headers",
-        "pw_bluetooth_emboss_group",
-    ],
-    defaults: [
-        "chre_linux_integration_cflags",
-        "pw_android_common_backends",
-        "pw_rpc_cflags_chre",
-    ],
-    static_libs: [
-        "absl_container_flat_hash_set",
-        "absl_container_node_hash_map",
-        "absl_log",
-        "absl_log_check",
-        "absl_flags_flag",
-        "chre_integration_lib",
-        "event_logger",
-        "libgmock",
-        "libgtest",
-        "libgtest_main",
-        "pw_allocator",
-        "chre_linux_integration",
-    ],
-    shared_libs: [
-        "libbase",
-    ],
-    vendor: true,
-    test_suites: ["general-tests"],
 }
 
 cc_library_headers {
@@ -1591,31 +1506,36 @@ cc_library_headers {
     vendor: true,
     export_include_dirs: [
         "apps/nearby",
+        "chre_api/include",
+        "chre_api/include/chre_api",
         "core/include",
-        "util/include",
+        "core/include/chre/core",
+        "pal/include",
+        "pal/util/include",
         "platform/include",
         "platform/linux/include",
+        "platform/shared/audio_pal/include",
+        "platform/shared/fbs/include",
         "platform/shared/include",
         "platform/shared/nanoapp/include",
-        "core/include",
+        "platform/shared/nanoapp_memory_guard_no_op/include",
+        "platform/shared/public_platform_ble_pal",
+        "platform/shared/public_platform_bt_socket_pal",
+        "platform/shared/public_platform_debug_dump_manager",
+        "platform/shared/public_platform_gnss_pal",
+        "platform/shared/public_platform_wifi_pal",
+        "platform/shared/public_platform_wwan_pal",
+        "platform/shared/public_std_atomic",
+        "platform/shared/sensor_pal/include",
         "test",
         "test/integration",
+        "test/integration/location/lbs/contexthub",
         "test/integration/location/lbs/contexthub/test_suite/integration",
+        "util/include",
+        "variant/googletest/include",
+        "variant/include",
     ],
     host_supported: true,
-}
-
-cc_defaults {
-    name: "chre_linux_integration_cflags",
-    cflags: [
-        "-DCHRE_IS_SIMULATOR_BUILD",
-        "-DCHRE_VARIANT_SUPPLIES_STATIC_NANOAPP_LIST",
-        "-DSIMULATION_LOAD_STATIC",
-        "-DCHRE_INTEGRATION_TEST_STATIC_NANOAPP_LIST",
-    ],
-    defaults: [
-        "chre_linux_common_cflags",
-    ],
 }
 
 cc_defaults {
@@ -1710,6 +1630,8 @@ filegroup {
         "core/sensor_type.cc",
         "core/sensor_type_helpers.cc",
         "core/settings.cc",
+        "core/static_nanoapps.cc",
+        "core/wwan_request_manager.cc",
         "platform/linux/task_util/task_manager.cc",
         "platform/shared/audio_pal/platform_audio.cc",
         "platform/shared/chre_api_audio.cc",
@@ -1731,6 +1653,7 @@ filegroup {
         "platform/shared/platform_ble.cc",
         "platform/shared/platform_bt_socket.cc",
         "platform/shared/platform_gnss.cc",
+        "platform/shared/platform_wwan.cc",
         "platform/shared/platform_wifi.cc",
         "platform/shared/sensor_pal/platform_sensor.cc",
         "platform/shared/sensor_pal/platform_sensor_manager.cc",
@@ -1754,6 +1677,11 @@ filegroup {
         "platform/linux/platform_nanoapp.cc",
         "platform/linux/platform_log.cc",
         "platform/linux/platform_debug_dump_manager.cc",
+    ],
+    exclude_srcs: [
+        "util/tests/**/*",
+        "platform/shared/platform_bt_socket.cc",
+        "test/integration/location/lbs/contexthub/test_suite/integration/platform/simulator_test.cc",
     ],
 }
 

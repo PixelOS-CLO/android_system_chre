@@ -22,6 +22,7 @@ import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.os.Build;
 import android.os.SystemClock;
 import android.util.Log;
 
@@ -30,13 +31,20 @@ public class AlarmManagerBridge {
     private static final String ACTION_ALARM_FIRED = "CHRE_AP_ALARM_FIRED";
     private static Context sContext;
     private static AlarmManager sAlarmManager;
+    private static long sCachedTimerId = -1;
 
     static void initialize(Context appContext) {
         sContext = appContext;
-        sContext.registerReceiver(
-                new AlarmReceiver(),
-                new IntentFilter(ACTION_ALARM_FIRED),
-                Context.RECEIVER_NOT_EXPORTED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            sContext.registerReceiver(
+                    new AlarmReceiver(),
+                    new IntentFilter(ACTION_ALARM_FIRED),
+                    Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            sContext.registerReceiver(
+                    new AlarmReceiver(),
+                    new IntentFilter(ACTION_ALARM_FIRED));
+        }
         sAlarmManager = sContext.getSystemService(AlarmManager.class);
         if (sAlarmManager == null) {
             Log.e(TAG, "Failed to get AlarmManager!");
@@ -64,8 +72,17 @@ public class AlarmManagerBridge {
                         (int) timerId,
                         intent,
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-
-        sAlarmManager.set(AlarmManager.ELAPSED_REALTIME_WAKEUP, triggerAtMillis, pendingIntent);
+        try {
+            sAlarmManager.setExactAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAtMillis, pendingIntent);
+            Log.d(TAG, "Set alarm at: " + triggerAtMillis + ", delay=" + delayMillis + " timerId="
+                    + timerId);
+        } catch (SecurityException | IllegalStateException e) {
+            // Some OEM's have a limit of maximum number of allowed alarms after which calling alarm
+            // manager throws exception. More details at go/gmscore-500-alarms
+            Log.e(TAG, "Failed to setExactAndAllowWhileIdle alarm", e);
+        }
+        sCachedTimerId = timerId;
     }
 
     static void cancelAlarm(long timerId) {
@@ -85,6 +102,7 @@ public class AlarmManagerBridge {
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
 
         sAlarmManager.cancel(pendingIntent);
+        Log.d(TAG, "Cancel alarm timerId=" + timerId);
     }
 
     public static class AlarmReceiver extends BroadcastReceiver {
@@ -92,7 +110,7 @@ public class AlarmManagerBridge {
         public void onReceive(Context context, Intent intent) {
             if (intent != null && ACTION_ALARM_FIRED.equals(intent.getAction())) {
                 long timerId = intent.getLongExtra("timerId", 0);
-                if (timerId != 0) {
+                if (timerId == sCachedTimerId) {
                     ContextHubAPNative.onAlarmFired(timerId);
                 }
             }

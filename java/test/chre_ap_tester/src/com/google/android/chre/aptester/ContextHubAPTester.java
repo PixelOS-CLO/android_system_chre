@@ -16,6 +16,7 @@
 
 package com.google.android.chre.aptester;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.pm.ApplicationInfo;
@@ -32,7 +33,6 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.google.android.chre.ap.ContextHubAPManager;
-import com.google.android.chre.ap.ContextHubAPNative;
 import com.google.android.chre.ap.ContextHubTransaction;
 import com.google.android.chre.ap.NanoAppMessage;
 import com.google.android.chre.ap.NanoAppState;
@@ -42,6 +42,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Enumeration;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -59,6 +60,13 @@ public class ContextHubAPTester extends Activity {
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private TextView mMessageTextView;
     private Thread mEventLoopThread = null;
+
+    private static final int PERMISSION_REQUEST_CODE = 0;
+
+    private static final String[] REQUIRED_PERMISSIONS = {
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.READ_PHONE_STATE
+    };
 
     private Set<String> getBundledSoFileNames() {
         Set<String> soFileNames = new HashSet<>();
@@ -112,9 +120,18 @@ public class ContextHubAPTester extends Activity {
         mMainHandler.postDelayed(() -> {
             mNanoAppListLayout.removeAllViews();
 
-            NanoAppState[] nanoAppInfos = ContextHubAPNative.listNanoapps();
+            ContextHubTransaction<List<NanoAppState>> queryTransaction =
+                    ContextHubAPManager.getInstance().queryNanoApps();
+            ContextHubTransaction.Response<List<NanoAppState>> resp = null;
+            try {
+                resp = queryTransaction.waitForResponse(/* timeout= */1, TimeUnit.SECONDS);
+            } catch (TimeoutException | InterruptedException e) {
+                mResultTextView.setText("Query timed out");
+                return;
+            }
+            List<NanoAppState> nanoAppInfos = resp.getContents();
 
-            if (nanoAppInfos == null || nanoAppInfos.length == 0) {
+            if (nanoAppInfos == null || nanoAppInfos.isEmpty()) {
                 TextView emptyView = new TextView(this);
                 emptyView.setText("No nanoapps currently loaded.");
                 emptyView.setPadding(8, 8, 8, 8);
@@ -180,6 +197,8 @@ public class ContextHubAPTester extends Activity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        requestPermissions(REQUIRED_PERMISSIONS, PERMISSION_REQUEST_CODE);
+
         setContentView(R.layout.activity_main);
         mResultTextView = findViewById(R.id.resultTextView);
         Button initButton = findViewById(R.id.initButton);
@@ -194,10 +213,10 @@ public class ContextHubAPTester extends Activity {
 
         initButton.setOnClickListener(v -> {
             // Start the CHRE environment.
-            ContextHubAPManager.getInstance().init(this);
-
+            ContextHubAPManager.getInstance().init(this, null /*lockFactory*/);
             mEventLoopThread = new Thread(() -> {
-                ContextHubAPManager.getInstance().runEventLoop(false /*useNativeThread*/);
+                ContextHubAPManager.getInstance().runEventLoop(
+                        ContextHubAPManager.EventLoopMode.PROVIDED);
             });
             mEventLoopThread.start();
             ContextHubAPManager.getInstance().setEventLoopThread(mEventLoopThread);
@@ -226,8 +245,8 @@ public class ContextHubAPTester extends Activity {
 
         // Create a Button to send message to Message World nanoapp.
         var callback = new MessageCallback(mMessageTextView);
-        var client = ContextHubAPManager.getInstance().createClient(callback);
         messageButton.setOnClickListener(v -> {
+            var client = ContextHubAPManager.getInstance().createClient(callback);
             var message = NanoAppMessage.createMessageToNanoApp(
                     0x0123456789000003L /*Message World Nanoapp ID*/, 100,
                     "Test message".getBytes(StandardCharsets.UTF_8));
