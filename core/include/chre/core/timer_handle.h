@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2025 The Android Open Source Project
+ * Copyright (C) 2026 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,14 +14,18 @@
  * limitations under the License.
  */
 
-/*
- * This header file can be used to define the configuration of the CHRE variant.
- *
- * See variant/include/chre/variant/config.h for the list of available
- * configurations and defaults.
- */
 #pragma once
 
-#define CHRE_MULTI_THREADING_ENABLED 1
+#include <cstdint>
 
-#define CHRE_ATOMIC_UINT8_ENABLED 1
+namespace chre {
+
+/**
+ * The type to use when referring to a timer instance for chre::TimerPool.
+ *
+ * Note that this mirrors the CHRE API definition of a timer handle, so should
+ * not be changed without appropriate consideration.
+ */
+typedef uint32_t TimerHandle;
+
+}  // namespace chre
