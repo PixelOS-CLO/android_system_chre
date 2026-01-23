@@ -3,6 +3,7 @@ include(backend.cmake)
 
 add_subdirectory(arm)
 add_subdirectory(freertos)
+add_subdirectory(linux)
 add_subdirectory(shared)
 
 pw_add_facade(chre.platform.assert INTERFACE
@@ -50,6 +51,7 @@ pw_add_facade(chre.platform.context INTERFACE
   PUBLIC_INCLUDES
     include
   PUBLIC_DEPS
+    chre.core
     chre.variant.config
 )
 
@@ -159,6 +161,7 @@ pw_add_facade(chre.platform.platform_ble INTERFACE
   PUBLIC_INCLUDES
     include
   PUBLIC_DEPS
+    chre.chre_api
     chre.util
     chre.variant.config
 )
@@ -184,6 +187,7 @@ pw_add_facade(chre.platform.platform_gnss INTERFACE
   PUBLIC_INCLUDES
     include
   PUBLIC_DEPS
+    chre.chre_api
     chre.util
     chre.variant.config
 )

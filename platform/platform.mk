@@ -288,6 +288,11 @@ endif
 
 GOOGLE_X86_LINUX_CFLAGS += -Iplatform/shared/public_std_atomic
 GOOGLE_X86_LINUX_CFLAGS += -Iplatform/linux/include
+GOOGLE_X86_LINUX_CFLAGS += -Iplatform/linux/public_fatal_error
+GOOGLE_X86_LINUX_CFLAGS += -Iplatform/linux/public_host_link
+GOOGLE_X86_LINUX_CFLAGS += -Iplatform/linux/public_platform_nanoapp
+GOOGLE_X86_LINUX_CFLAGS += -Iplatform/linux/public_power_control_manager
+GOOGLE_X86_LINUX_CFLAGS += -Iplatform/linux/public_system_timer
 
 # Linux-specific Source Files ##################################################
 
@@ -503,6 +508,7 @@ TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/chre_api_core.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/chre_api_gnss.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/chre_api_msg.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/chre_api_re.cc
+TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/chre_api_sensor.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/chre_api_user_settings.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/chre_api_version.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/chre_api_wifi.cc
@@ -534,10 +540,11 @@ endif
 
 ifeq ($(CHRE_SENSORS_SUPPORT_ENABLED), true)
 TINYSYS_CFLAGS += -I$(CHRE_PREFIX)/platform/shared/sensor_pal/include
-TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/chre_api_sensor.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/sensor_pal/platform_sensor_manager.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/sensor_pal/platform_sensor.cc
 TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/sensor_pal/platform_sensor_type_helpers.cc
+else
+TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/pal_sensor_stub.cc
 endif
 
 ifeq ($(CHRE_AUDIO_SUPPORT_ENABLED), true)
