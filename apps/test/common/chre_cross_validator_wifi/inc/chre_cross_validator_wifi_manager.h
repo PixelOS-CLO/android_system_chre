@@ -60,7 +60,11 @@ class Manager {
   CrossValidatorState mCrossValidatorState;
 
   DynamicVector<WifiScanResult> mApScanResults;
-  DynamicVector<chreWifiScanResult> mChreScanResults;
+
+  // Nanoapp might receive multiple batches when there are different host asking
+  // for scan.
+  // This stores each batch separately to allow individual verification.
+  DynamicVector<DynamicVector<chreWifiScanResult>> mChreScanResults;
 
   // The expected max chre scan results to be validated. This number is an
   // arbitrary number we assume that CHRE can handle. It is perfectly fine for
@@ -71,9 +75,16 @@ class Manager {
   // to avoid catching the tail end of a previous scan result.
   bool mScanStartSeen = false;
 
+  //! The number of CHRE scan result batches that have been processed and
+  //! verified.
+  size_t mNumChreScanResultsProcessed = 0;
+
   //! Bools indicating that data collection is complete for each side
   bool mApDataCollectionDone = false;
   bool mChreDataCollectionDone = false;
+
+  //! The timer handle for the data collection timeout.
+  uint32_t mTimeoutTimerHandle = CHRE_TIMER_INVALID;
 
   /**
    * Handle a message from the host.
@@ -90,6 +101,13 @@ class Manager {
    */
   void handleStepStartMessage(
       chre_cross_validation_wifi_StepStartCommand stepStartCommand);
+
+  /**
+   * Handle a timer event.
+   *
+   * @param eventData The cookie passed to the timer.
+   */
+  void handleTimerEvent(const void *eventData);
 
   /**
    * Sends the test result to host.
@@ -130,11 +148,43 @@ class Manager {
   /**
    * Verify the wifi scan results are matching between AP and CHRE.
    *
-   * @param testResultOut Pointer to the test result proto message which will be
-   *                      sent back to host, whose bool and message depends on
-   *                      the checks inside this method.
+   * @return true if a matching batch was found.
    */
-  void verifyScanResults(chre_test_common_TestResult *testResultOut);
+  bool verifyScanResults();
+
+  /**
+   * Verify that the number of AP and CHRE scan results fall within expected
+   * bounds.
+   *
+   * @param apResults List of AP scan results.
+   * @param chreBatch Current batch of CHRE scan results.
+   * @param maxExpected The expected max CHRE results.
+   * @return true if counts are valid.
+   */
+  bool verifyScanResultCounts(
+      const DynamicVector<WifiScanResult> &apResults,
+      const DynamicVector<chreWifiScanResult> &chreBatch, uint8_t maxExpected);
+
+  /**
+   * Verify that each result in the CHRE batch has a matching valid result in
+   * the AP results.
+   *
+   * @param chreBatch Current batch of CHRE scan results.
+   * @param apResults List of AP scan results (modified to track 'seen' state).
+   * @return true if all CHRE results match AP results.
+   */
+  bool verifyChreResultsMatchAp(
+      const DynamicVector<chreWifiScanResult> &chreBatch,
+      DynamicVector<WifiScanResult> &apResults);
+
+  /**
+   * Verify that all expected AP results were seen in the CHRE batch.
+   *
+   * @param apResults List of AP scan results.
+   * @return true if all expected AP results were seen.
+   */
+  bool verifyApResultsSeenInChre(
+      const DynamicVector<WifiScanResult> &apResults);
 
   /**
    * Get the scan result that has the same bssid as the scan result passed.
@@ -155,6 +205,15 @@ class Manager {
    * @param result The data for the event.
    */
   void handleWifiAsyncResult(const chreAsyncResult *result);
+
+  // Buffer to store the detailed reason for the last verification failure.
+  static constexpr size_t kMaxErrorMsgLen = 256;
+  char mLastErrorMsg[kMaxErrorMsgLen] = {};
+
+  /**
+   * Helper to store an error message in mLastErrorMsg.
+   */
+  void setLastError(const char *errorMsg);
 };
 
 // The chre cross validator manager singleton.

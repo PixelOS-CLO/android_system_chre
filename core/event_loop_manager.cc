@@ -46,20 +46,48 @@ bool EventLoopManager::inEventLoopForNanoapp(uint64_t appId) {
   return eventLoop->findNanoappInstanceIdByAppId(appId, &instanceId);
 }
 
-uint16_t EventLoopManager::getNextInstanceId() {
-  // Get the next available instance ID and mask off the upper 16 bit.
-  uint16_t instanceId =
-      static_cast<uint16_t>(mNextInstanceId.fetch_increment() & 0x0000FFFF);
-
-  // 65536 instance IDs should be enough for normal use cases. If we need to
-  // support wraparound for stress testing load/unload, then we can set a flag
-  // when wraparound occurs and use EventLoop::findNanoappByInstanceId to ensure
-  // we avoid conflicts
-  if (instanceId == kBroadcastInstanceId || instanceId == kSystemInstanceId) {
-    FATAL_ERROR("Exhausted instance IDs!");
+EventLoop *EventLoopManager::getEventLoopByAppId(uint64_t appId) {
+  for (auto &eventLoop : mEventLoops) {
+    Nanoapp *nanoapp = eventLoop.findNanoappByAppId(appId);
+    if (nanoapp != nullptr) {
+      return &eventLoop;
+    }
   }
 
-  return instanceId;
+  return nullptr;
+}
+
+EventLoop *EventLoopManager::getEventLoopByInstanceId(
+    uint16_t nanoappInstanceId) {
+  NanoappInstanceId nanoappInstanceIdStruct;
+  nanoappInstanceIdStruct.instanceIdAndEventLoopIndex = nanoappInstanceId;
+  if (nanoappInstanceIdStruct.eventLoopIndex < mEventLoops.size()) {
+    return &mEventLoops[nanoappInstanceIdStruct.eventLoopIndex];
+  } else {
+    LOGE("Invalid event loop index %" PRIu16 " for instanceId 0x%" PRIx16,
+         nanoappInstanceIdStruct.eventLoopIndex, nanoappInstanceId);
+    return nullptr;
+  }
+}
+
+uint16_t EventLoopManager::getNextInstanceId() {
+  EventLoop *eventLoop = getCurrentEventLoop();
+  if (eventLoop == nullptr) {
+    FATAL_ERROR("No event loop found!");
+  }
+
+  CHRE_ASSERT(mEventLoops.size() < NanoappInstanceId::kMaxEventLoopIndex);
+  for (size_t i = 0; i < mEventLoops.size(); ++i) {
+    if (&mEventLoops[i] == eventLoop) {
+      NanoappInstanceId nanoappInstanceId;
+      nanoappInstanceId.instanceId = eventLoop->getNextNanoappInstanceId();
+      nanoappInstanceId.eventLoopIndex = static_cast<uint16_t>(i);
+      return nanoappInstanceId.instanceIdAndEventLoopIndex;
+    }
+  }
+
+  FATAL_ERROR("Invalid event loop");
+  return 0;
 }
 
 // TODO(b/264108686): Refactor this function and postSystemEvent
@@ -109,22 +137,22 @@ bool EventLoopManager::postEvent(uint16_t eventType, void *eventData,
   Event *event = mEventPool.allocate(
       eventType, eventData, freeCallback, isLowPriority, senderInstanceId,
       targetInstanceId, targetGroupMask, initialRefCount);
-  for (auto &loop : mEventLoops) {
-    // TODO(b/435246073): This lookup can be a hot path. Consider optimizing
-    // this by encoding the event loop ID within the instance ID to avoid
-    // iterating through all event loops.
-    if (isBroadcast ||
-        loop.findNanoappByInstanceId(targetInstanceId) != nullptr) {
-      if (!loop.isRunning()) continue;
-      bool success = loop.postEvent(event, isLowPriority);
-      if (!success && !isLowPriority) {
-        FATAL_ERROR("Failed to post critical system event 0x%" PRIx16,
-                    event->eventType);
-      }
-      if (!success && event != nullptr) {
-        event->decrementRefCount();
-      }
-      eventPosted |= success;
+
+  if (isBroadcast) {
+    for (auto &loop : mEventLoops) {
+      eventPosted |= postEventToLoop(loop, event, isLowPriority);
+    }
+  } else {
+    NanoappInstanceId nanoappInstanceId;
+    nanoappInstanceId.instanceIdAndEventLoopIndex = targetInstanceId;
+    size_t eventLoopIndex = nanoappInstanceId.eventLoopIndex;
+
+    if (eventLoopIndex < mEventLoops.size()) {
+      auto &loop = mEventLoops[eventLoopIndex];
+      eventPosted = postEventToLoop(loop, event, isLowPriority);
+    } else {
+      LOGE("Invalid event loop index %zu for instanceId 0x%" PRIx16,
+           eventLoopIndex, targetInstanceId);
     }
   }
 
@@ -139,6 +167,10 @@ bool EventLoopManager::postEvent(uint16_t eventType, void *eventData,
   }
 
   return true;
+}
+
+bool EventLoopManager::isEventPending() {
+  return !mEventPool.empty();
 }
 
 void EventLoopManager::lateInit() {
@@ -169,6 +201,55 @@ void EventLoopManager::lateInit() {
 #ifdef CHRE_MESSAGE_ROUTER_SUPPORT_ENABLED
   mChreMessageHubManager->init();
 #endif  // CHRE_MESSAGE_ROUTER_SUPPORT_ENABLED
+}
+
+bool EventLoopManager::postEventToLoop(EventLoop &loop, Event *event,
+                                       bool isLowPriority) {
+  bool eventPosted = loop.postEvent(event, isLowPriority);
+  if (!eventPosted && event != nullptr) {
+    event->decrementRefCount();
+  }
+  return eventPosted;
+}
+
+uint32_t EventLoopManager::getBleCapabilitiesLocked() {
+#ifdef CHRE_BLE_SUPPORT_ENABLED
+  return getBleRequestManager().getCapabilities();
+#else
+  return CHRE_BLE_CAPABILITIES_NONE;
+#endif  // CHRE_BLE_SUPPORT_ENABLED
+}
+
+uint32_t EventLoopManager::getBleFilterCapabilitiesLocked() {
+#ifdef CHRE_BLE_SUPPORT_ENABLED
+  return getBleRequestManager().getFilterCapabilities();
+#else
+  return CHRE_BLE_FILTER_CAPABILITIES_NONE;
+#endif  // CHRE_BLE_SUPPORT_ENABLED
+}
+
+uint32_t EventLoopManager::getWifiCapabilitiesLocked() {
+#ifdef CHRE_WIFI_SUPPORT_ENABLED
+  return getWifiRequestManager().getCapabilities();
+#else
+  return CHRE_WIFI_CAPABILITIES_NONE;
+#endif  // CHRE_WIFI_SUPPORT_ENABLED
+}
+
+uint32_t EventLoopManager::getGnssCapabilitiesLocked() {
+#ifdef CHRE_GNSS_SUPPORT_ENABLED
+  return getGnssManager().getCapabilities();
+#else
+  return CHRE_GNSS_CAPABILITIES_NONE;
+#endif  // CHRE_GNSS_SUPPORT_ENABLED
+}
+
+uint32_t EventLoopManager::getWwanCapabilitiesLocked() {
+#ifdef CHRE_WWAN_SUPPORT_ENABLED
+  return getWwanRequestManager().getCapabilities();
+#else
+  return CHRE_WWAN_CAPABILITIES_NONE;
+#endif  // CHRE_WWAN_SUPPORT_ENABLED
 }
 
 // Explicitly instantiate the EventLoopManagerSingleton to reduce codesize.

@@ -105,7 +105,7 @@ cc_defaults {
     ],
     shared_libs: [
         "android.frameworks.stats-V2-ndk",
-        "android.hardware.contexthub-V4-ndk",
+        "android.hardware.contexthub-V5-ndk",
         "chre_atoms_log",
         "chremetrics-cpp",
         "libaconfig_storage_read_api_cc",
@@ -157,7 +157,7 @@ cc_library_static {
     header_libs: ["chre_flatbuffers"],
     export_header_lib_headers: ["chre_flatbuffers"],
     shared_libs: [
-        "android.hardware.contexthub-V4-ndk",
+        "android.hardware.contexthub-V5-ndk",
         "libaconfig_storage_read_api_cc",
         "libbase",
         "libbinder_ndk",
@@ -514,7 +514,7 @@ cc_library_static {
         "util/include",
     ],
     shared_libs: [
-        "android.hardware.contexthub-V4-ndk",
+        "android.hardware.contexthub-V5-ndk",
         "libcutils",
         "libutils",
     ],
@@ -561,6 +561,7 @@ cc_test_host {
         "host/common/fragmented_load_transaction.cc",
         "host/common/hal_client.cc",
         "host/common/host_protocol_host.cc",
+        "host/hal_generic/common/data_flow_epoll_waiter.cc",
         "host/hal_generic/common/hal_client_manager.cc",
         "host/hal_generic/common/message_hub_manager.cc",
         "host/test/**/*_test.cc",
@@ -577,7 +578,7 @@ cc_test_host {
         "util/include/",
     ],
     static_libs: [
-        "android.hardware.contexthub-V4-ndk",
+        "android.hardware.contexthub-V5-ndk",
         "chre_flags_c_lib",
         "chre_host_common",
         "chre_host_util",
@@ -588,7 +589,7 @@ cc_test_host {
     ],
     shared_libs: [
         "android.frameworks.stats-V2-ndk",
-        "android.hardware.contexthub-V4-ndk",
+        "android.hardware.contexthub-V5-ndk",
         "chre_atoms_log",
         "libaconfig_storage_read_api_cc",
         "libbase",
@@ -1304,6 +1305,7 @@ cc_defaults {
     cflags: [
         "-DCHRE_BLE_SOCKET_SUPPORT_ENABLED",
         "-DCHRE_MESSAGE_ROUTER_SUPPORT_ENABLED",
+        "-DCHRE_DATA_FLOW_SUPPORT_ENABLED",
     ],
     defaults: [
         "chre_linux_common_cflags",
@@ -1363,6 +1365,7 @@ cc_library_static {
         "host/common/config_util.cc",
     ],
     shared_libs: [
+        "libbase",
         "libjsoncpp",
         "liblog",
     ],
@@ -1414,6 +1417,7 @@ cc_library_static {
         "host/common/time_util.cc",
     ],
     shared_libs: [
+        "libbase",
         "liblog",
         "libutils",
     ],
@@ -1647,6 +1651,7 @@ filegroup {
         "core/host_comms_manager.cc",
         "core/host_endpoint_manager.cc",
         "core/host_message_hub_manager.cc",
+        "core/multi_threading_api_mutex.cc",
         "core/nanoapp.cc",
         "core/sensor.cc",
         "core/sensor_request.cc",

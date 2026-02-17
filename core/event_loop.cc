@@ -136,6 +136,15 @@ void EventLoop::forEachNanoapp(NanoappCallbackFunction *callback, void *data) {
   }
 }
 
+void EventLoop::unregisterEventForNanoapp(uint16_t instanceId,
+                                          uint16_t eventType,
+                                          uint16_t targetGroupMask) {
+  Nanoapp *nanoapp = findNanoappByInstanceId(instanceId);
+  if (nanoapp != nullptr) {
+    nanoapp->unregisterForBroadcastEvent(eventType, targetGroupMask);
+  }
+}
+
 void EventLoop::invokeMessageFreeFunction(uint64_t appId,
                                           chreMessageFreeFunction *freeFunction,
                                           void *message, size_t messageSize) {
@@ -200,9 +209,14 @@ bool EventLoop::startNanoapp(UniquePtr<Nanoapp> &&nanoapp) {
          static_cast<uint32_t>(CHRE_FIRST_SUPPORTED_API_VERSION));
   } else if (findNanoappInstanceIdByAppId(nanoapp->getAppId(),
                                           &existingInstanceId)) {
-    LOGE("App with ID 0x%016" PRIx64 " already exists as instance ID %" PRIu16,
+    LOGE("App with ID 0x%016" PRIx64
+         " already exists as instance ID 0x%" PRIx16,
          nanoapp->getAppId(), existingInstanceId);
   } else {
+    nanoapp->setInstanceId(
+        EventLoopManagerSingleton::get()->getNextInstanceId());
+    LOGD("Instance ID 0x%" PRIx16 " assigned to app ID 0x%" PRIx64,
+         nanoapp->getInstanceId(), nanoapp->getAppId());
     Nanoapp *newNanoapp = nanoapp.get();
     {
       LockGuard<Mutex> lock(mNanoappsLock);
@@ -217,7 +231,7 @@ bool EventLoop::startNanoapp(UniquePtr<Nanoapp> &&nanoapp) {
       success = newNanoapp->start();
       mCurrentApp = nullptr;
       if (!success) {
-        LOGE("Nanoapp %" PRIu16 " failed to start",
+        LOGE("Nanoapp 0x%" PRIx16 " failed to start",
              newNanoapp->getInstanceId());
         unloadNanoapp(newNanoapp->getInstanceId(),
                       /*allowSystemNanoappUnload=*/true,
@@ -278,7 +292,7 @@ bool EventLoop::unloadNanoapp(uint16_t instanceId,
         unloadNanoappAtIndex(i, nanoappStarted);
         mStoppingNanoapp = nullptr;
 
-        LOGD("Unloaded nanoapp with instanceId %" PRIu16, instanceId);
+        LOGD("Unloaded nanoapp with instanceId 0x%" PRIx16, instanceId);
         unloaded = true;
       }
       break;
@@ -329,7 +343,19 @@ bool EventLoop::distributeEventSync(uint16_t eventType, void *eventData,
               /* isLowPriority= */ false,
               /* senderInstanceId= */ kSystemInstanceId, targetInstanceId,
               targetGroupMask);
-  return distributeEventCommon(&event);
+
+  return distributeEventSyncInternal(&event, getMultiThreadingApiMutex());
+}
+
+bool EventLoop::distributeEventSyncInternal(Event *event,
+                                            MultiThreadingApiMutex *lock) {
+  // This function is only called from a deferred callback context,
+  // and the global mutex must be unlocked prior to potentially entering
+  // nanoapp code.
+  lock->unlock();
+  bool success = distributeEventCommon(event);
+  lock->lock();
+  return success;
 }
 
 // TODO(b/435246073): Remove once migrated to new EventLoopManager APIs
@@ -347,6 +373,7 @@ bool EventLoop::postSystemEvent(uint16_t eventType, void *eventData,
   return EventLoopManagerSingleton::get()->postSystemEvent(eventType, eventData,
                                                            callback, extraData);
 }
+
 bool EventLoop::postLowPriorityEventOrFree(
     uint16_t eventType, void *eventData,
     chreEventCompleteFunction *freeCallback, uint16_t senderInstanceId,
@@ -542,6 +569,24 @@ void EventLoop::loadStaticNanoapps(
   }
 }
 
+uint16_t EventLoop::getNextNanoappInstanceId() {
+  constexpr uint16_t kMaxInstanceId =
+      EventLoopManager::NanoappInstanceId::kMaxPureInstanceId;
+
+  // Get the next available instance ID and mask off the upper 12 bit.
+  uint16_t instanceId =
+      static_cast<uint16_t>(mNextInstanceId++ & kMaxInstanceId);
+
+  // 4096 instance IDs should be enough for normal use cases. If we need to
+  // support wraparound for stress testing load/unload, then we can set a flag
+  // when wraparound occurs and use EventLoop::findNanoappByInstanceId to ensure
+  // we avoid conflicts
+  if (instanceId == kMaxInstanceId || instanceId == kSystemInstanceId) {
+    FATAL_ERROR("Exhausted instance IDs!");
+  }
+  return instanceId;
+}
+
 void EventLoop::deliverNextEvent(const UniquePtr<Nanoapp> &app, Event *event) {
   constexpr Seconds kLatencyThreshold = Seconds(1);
   constexpr Seconds kThrottleInterval(1);
@@ -574,9 +619,7 @@ void EventLoop::deliverNextEvent(const UniquePtr<Nanoapp> &app, Event *event) {
 
 void EventLoop::distributeEvent(Event *event) {
   distributeEventCommon(event);
-  if (event->decrementRefCount() == 1) {
-    freeEvent(event);
-  }
+  freeEvent(event);
 }
 
 bool EventLoop::distributeEventCommon(Event *event) {
@@ -604,7 +647,8 @@ bool EventLoop::distributeEventCommon(Event *event) {
   // after queues are flushed while it's unloading)
   if (!eventDelivered && event->targetInstanceId != kBroadcastInstanceId &&
       event->targetInstanceId != kSystemInstanceId) {
-    LOGW("Dropping event 0x%" PRIx16 " from instanceId %" PRIu16 "->%" PRIu16,
+    LOGW("Dropping event 0x%" PRIx16 " from instanceId 0x%" PRIx16
+         "->0x%" PRIx16,
          event->eventType, event->senderInstanceId, event->targetInstanceId);
   }
   return eventDelivered;
@@ -616,27 +660,76 @@ void EventLoop::flushInboundEventQueue() {
   }
 }
 
+void EventLoop::invokeNanoappFreeCallback(Event *event) {
+  mCurrentApp = lookupAppByInstanceId(event->senderInstanceId);
+  if (mCurrentApp != nullptr) {
+    mCurrentApp->invokeEventFreeCallback(event->freeCallback, event->eventType,
+                                         event->eventData);
+  } else {
+    LOGE("No app found (senderInstanceId=0x%" PRIx16
+         ", targetInstanceId=0x%" PRIx16 ", type=0x%" PRIx16
+         ") for free event callback",
+         event->senderInstanceId, event->targetInstanceId, event->eventType);
+  }
+  mCurrentApp = nullptr;
+}
+
 void EventLoop::freeEvent(Event *event) {
+  // Free the event if and only if this was the last reference to it.
+  if (event->decrementRefCount() != 1) return;
+
+  bool eventDeallocatedDeferred = false;
+  mCurrentFreeingEventStack.push_back(event);
+  // It's possible for a deferred callback or free event to result in
+  // modifying internal states, so we lock the global mutex here.
   if (event->targetInstanceId == kSystemInstanceId) {
+    GlobalApiLockGuard lock;
     event->invokeSystemEventCallback();
   } else if (event->freeCallback != nullptr) {
     if (event->senderInstanceId == kSystemInstanceId) {
+      GlobalApiLockGuard lock;
       event->invokeEventFreeCallback();
     } else {
-      mCurrentApp = lookupAppByInstanceId(event->senderInstanceId);
-      if (mCurrentApp != nullptr) {
-        mCurrentApp->invokeEventFreeCallback(
-            event->freeCallback, event->eventType, event->eventData);
+      // If the sender event loop is not the current loop, defer a callback
+      // to invoke the free callback in the nanoapp's context, and deallocate
+      // the event afterwards.
+      EventLoop *senderEventLoop =
+          EventLoopManagerSingleton::get()->getEventLoopByInstanceId(
+              event->senderInstanceId);
+      CHRE_ASSERT(senderEventLoop != nullptr);
+      if (senderEventLoop != getCurrentEventLoop()) {
+        // TODO(b/475537998): Optimize callbacks to avoid unnecessary global
+        // mutex locks
+        auto callback =
+            [](uint16_t /* eventType */, void *data,
+               void * /* extraData */) CHRE_NO_THREAD_SAFETY_ANALYSIS {
+              auto *mutex = getMultiThreadingApiMutex();
+              mutex->unlock();
+              EventLoop *currentEventLoop = getCurrentEventLoop();
+              CHRE_ASSERT(currentEventLoop != nullptr);
+              Event *event = static_cast<Event *>(data);
+              EventLoop *senderEventLoop =
+                  EventLoopManagerSingleton::get()->getEventLoopByInstanceId(
+                      event->senderInstanceId);
+              CHRE_ASSERT(currentEventLoop == senderEventLoop);
+
+              currentEventLoop->freeEvent(event);
+              mutex->lock();
+            };
+        event->incrementRefCount();
+        eventDeallocatedDeferred =
+            EventLoopManagerSingleton::get()->deferCallback(
+                chre::SystemCallbackType::NanoappSendEventFreeCallback, event,
+                callback, /* extraData= */ nullptr, senderEventLoop);
       } else {
-        LOGE("No app found (senderIId=%" PRIu16 ", targetIId=%" PRIu16
-             ", type=0x%" PRIx16 ") for free event callback",
-             event->senderInstanceId, event->targetInstanceId,
-             event->eventType);
+        invokeNanoappFreeCallback(event);
       }
-      mCurrentApp = nullptr;
     }
   }
-  EventLoopManagerSingleton::get()->deallocateEvent(event);
+  if (!eventDeallocatedDeferred) {
+    EventLoopManagerSingleton::get()->deallocateEvent(event);
+  }
+  mCurrentFreeingEventStack.pop_back();
 }
 
 Nanoapp *EventLoop::lookupAppByAppId(uint64_t appId) const {
@@ -749,7 +842,8 @@ void EventLoop::unloadNanoappAtIndex(size_t index, bool nanoappStarted) {
 #endif  // CHRE_MESSAGE_ROUTER_SUPPORT_ENABLED
 
   const uint32_t numCancelledTimers =
-      getTimerPool().cancelAllNanoappTimers(nanoapp.get());
+      EventLoopManagerSingleton::get()->getTimerPool().cancelAllNanoappTimers(
+          nanoapp.get());
   logDanglingResources("timers", numCancelledTimers);
 
   const uint32_t numFreedBlocks =

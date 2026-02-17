@@ -57,6 +57,7 @@ struct TestNanoappInfo {
   uint64_t id = kDefaultTestNanoappId;
   uint32_t version = 0;
   uint32_t perms = NanoappPermissions::CHRE_PERMS_NONE;
+  int8_t requestedThreadPriority = NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL;
 };
 
 /**
@@ -105,6 +106,10 @@ class TestNanoapp {
 
   uint32_t perms() {
     return mTestNanoappInfo.perms;
+  }
+
+  int8_t requestedThreadPriority() const {
+    return mTestNanoappInfo.requestedThreadPriority;
   }
 
   //! Call this function to trigger the wait condition and release the
@@ -163,7 +168,8 @@ UniquePtr<Nanoapp> createStaticNanoapp(
     const char *name, uint64_t appId, uint32_t appVersion, uint32_t appPerms,
     decltype(nanoappStart) *startFunc,
     decltype(nanoappHandleEvent) *handleEventFunc,
-    decltype(nanoappEnd) *endFunc);
+    decltype(nanoappEnd) *endFunc,
+    int8_t requestedThreadPriority = NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
 
 /**
  * @return the statically loaded nanoapp based on the arguments, additionally
@@ -175,7 +181,8 @@ UniquePtr<Nanoapp> createStaticNanoapp(
     uint8_t infoStructVersion, const char *name, uint64_t appId,
     uint32_t appVersion, uint32_t appPerms, decltype(nanoappStart) *startFunc,
     decltype(nanoappHandleEvent) *handleEventFunc,
-    decltype(nanoappEnd) *endFunc);
+    decltype(nanoappEnd) *endFunc,
+    int8_t requestedThreadPriority = NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
 
 /**
  * Deletes memory allocated by createStaticNanoapp.
@@ -199,10 +206,12 @@ void defaultNanoappEnd();
  *
  * @see createStatic Nanoapp.
  */
-void loadNanoapp(const char *name, uint64_t appId, uint32_t appVersion,
-                 uint32_t appPerms, decltype(nanoappStart) *startFunc,
-                 decltype(nanoappHandleEvent) *handleEventFunc,
-                 decltype(nanoappEnd) *endFunc);
+void loadNanoapp(
+    const char *name, uint64_t appId, uint32_t appVersion, uint32_t appPerms,
+    decltype(nanoappStart) *startFunc,
+    decltype(nanoappHandleEvent) *handleEventFunc,
+    decltype(nanoappEnd) *endFunc, EventLoop *eventLoop,
+    int8_t requestedThreadPriority = NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
 
 /**
  * Create a static nanoapp and load it in CHRE.
@@ -211,7 +220,8 @@ void loadNanoapp(const char *name, uint64_t appId, uint32_t appVersion,
  *
  * @return The id of the nanoapp.
  */
-uint64_t loadNanoapp(UniquePtr<TestNanoapp> app);
+uint64_t loadNanoappOnEventLoop(UniquePtr<TestNanoapp> app,
+                                EventLoop *eventLoop);
 
 /**
  * Unload nanoapp corresponding to appId.
@@ -220,7 +230,7 @@ uint64_t loadNanoapp(UniquePtr<TestNanoapp> app);
  *
  * @param appId App Id of nanoapp to be unloaded.
  */
-void unloadNanoapp(uint64_t appId);
+void unloadNanoappOnEventLoop(uint64_t appId, EventLoop *eventLoop);
 
 /**
  * A convenience deferred callback function that can be used to start an
@@ -292,9 +302,10 @@ void sendEventToNanoapp(uint64_t appId, uint16_t eventType,
                         const T &eventData) {
   static_assert(std::is_trivial<T>::value);
   uint16_t instanceId;
-  if (EventLoopManagerSingleton::get()
-          ->getEventLoop()
-          .findNanoappInstanceIdByAppId(appId, &instanceId)) {
+  EventLoop *eventLoop =
+      EventLoopManagerSingleton::get()->getEventLoopByAppId(appId);
+  if (eventLoop != nullptr &&
+      eventLoop->findNanoappInstanceIdByAppId(appId, &instanceId)) {
     auto event = memoryAlloc<TestEvent>();
     ASSERT_NE(event, nullptr);
     event->type = eventType;

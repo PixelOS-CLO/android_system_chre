@@ -18,7 +18,8 @@
 
 namespace aidl::android::hardware::contexthub {
 TinysysContextHub::TinysysContextHub() {
-  mConnection = std::make_unique<TinysysChreConnection>(this);
+  mTinysysConnection = std::make_shared<TinysysChreConnection>(this);
+  mConnection = mTinysysConnection;
   mHalClientManager = std::make_unique<HalClientManager>(
       mDeadClientUnlinker, kClientIdMappingFilePath);
   mPreloadedNanoappLoader = std::make_unique<PreloadedNanoappLoader>(
@@ -32,9 +33,15 @@ TinysysContextHub::TinysysContextHub() {
   }
 }
 
-void TinysysContextHub::onChreRestarted() {
-  mLogger.resetNanoappDetokenizerState();
+void TinysysContextHub::onChreReconnected(bool chreRestarted) {
+  if (chreRestarted) {
+    mLogger.resetNanoappDetokenizerState();
+  }
   mPreloadedNanoappLoader->loadPreloadedNanoapps();
-  MultiClientContextHubBase::onChreRestarted();
+  MultiClientContextHubBase::onChreReconnected();
+}
+
+std::shared_ptr<BluetoothSocketOffloadLink> TinysysContextHub::getBluetoothSocketOffloadLink() {
+  return std::static_pointer_cast<BluetoothSocketOffloadLink>(mTinysysConnection);
 }
 }  // namespace aidl::android::hardware::contexthub

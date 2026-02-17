@@ -166,7 +166,11 @@ void TinysysChreConnection::messageHandlerTask(
           /* timeoutMs= */ std::chrono::milliseconds(10000));
       LOGW("SCP restarted! CHRE recover time: %" PRIu64 "ms.",
            ::android::elapsedRealtime() - startTime);
-      chreConnection->mCallback->onChreRestarted();
+      chreConnection->mCallback->onChreReconnected();
+      chreConnection->mBtSocketCallback->onOffloadLinkReconnected();
+    } else if (chreCurrentState == SCP_CHRE_START && chreNextState == SCP_CHRE_STOP) {
+      LOGI("SCP stopped, notify Socket Offload link disconnected!");
+      chreConnection->mBtSocketCallback->onOffloadLinkDisconnected();
     }
     chreCurrentState = chreNextState;
   }
@@ -260,6 +264,13 @@ void TinysysChreConnection::handleMessageFromChre(
     case fbs::ChreMessage::TimeSyncRequest:
     case fbs::ChreMessage::LogMessage: {
       LOGE("Unsupported message type %hhu received from CHRE.", messageType);
+      break;
+    }
+    case fbs::ChreMessage::BtSocketOpenResponse:
+    case fbs::ChreMessage::BtSocketClose:
+    case fbs::ChreMessage::BtSocketCapabilitiesResponse: {
+      chreConnection->mBtSocketCallback->handleMessageFromOffloadStack(messageBuffer,
+                                                                       messageLen);
       break;
     }
     default: {

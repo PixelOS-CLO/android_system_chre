@@ -18,10 +18,12 @@
 #define CHRE_UTIL_SYSTEM_MESSAGE_COMMON_TYPES_H_
 
 #include "pw_allocator/unique_ptr.h"
+#include "pw_span/span.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 
 namespace chre::message {
 
@@ -98,8 +100,8 @@ struct Endpoint {
   Endpoint()
       : messageHubId(MESSAGE_HUB_ID_INVALID), endpointId(ENDPOINT_ID_INVALID) {}
 
-  Endpoint(MessageHubId messageHubId, EndpointId endpointId)
-      : messageHubId(messageHubId), endpointId(endpointId) {}
+  Endpoint(MessageHubId initMessageHubId, EndpointId initEndpointId)
+      : messageHubId(initMessageHubId), endpointId(initEndpointId) {}
 
   bool operator==(const Endpoint &other) const {
     return messageHubId == other.messageHubId && endpointId == other.endpointId;
@@ -121,15 +123,15 @@ struct Session {
     serviceDescriptor[0] = '\0';
   }
 
-  Session(SessionId sessionId, Endpoint initiator, Endpoint peer,
-          const char *serviceDescriptor)
-      : sessionId(sessionId),
+  Session(SessionId initSessionId, Endpoint initInitiator, Endpoint initPeer,
+          const char *initServiceDescriptor)
+      : sessionId(initSessionId),
         isActive(false),
-        hasServiceDescriptor(serviceDescriptor != nullptr),
-        initiator(initiator),
-        peer(peer) {
-    if (serviceDescriptor != nullptr) {
-      std::strncpy(this->serviceDescriptor, serviceDescriptor,
+        hasServiceDescriptor(initServiceDescriptor != nullptr),
+        initiator(initInitiator),
+        peer(initPeer) {
+    if (initServiceDescriptor != nullptr) {
+      std::strncpy(this->serviceDescriptor, initServiceDescriptor,
                    kMaxServiceDescriptorLength);
     } else {
       this->serviceDescriptor[0] = '\0';
@@ -185,15 +187,17 @@ struct Message {
         messageType(0),
         messagePermissions(0) {}
 
-  Message(pw::UniquePtr<std::byte[]> &&data, uint32_t messageType,
-          uint32_t messagePermissions, Session session,
-          bool sentBySessionInitiator)
-      : sender(sentBySessionInitiator ? session.initiator : session.peer),
-        recipient(sentBySessionInitiator ? session.peer : session.initiator),
-        sessionId(session.sessionId),
-        data(std::move(data)),
-        messageType(messageType),
-        messagePermissions(messagePermissions) {}
+  Message(pw::UniquePtr<std::byte[]> &&ourData, uint32_t initMessageType,
+          uint32_t initMessagePermissions, Session initSession,
+          bool initSentBySessionInitiator)
+      : sender(initSentBySessionInitiator ? initSession.initiator
+                                          : initSession.peer),
+        recipient(initSentBySessionInitiator ? initSession.peer
+                                             : initSession.initiator),
+        sessionId(initSession.sessionId),
+        data(std::move(ourData)),
+        messageType(initMessageType),
+        messagePermissions(initMessagePermissions) {}
 
   Message(const Message &) = delete;
   Message &operator=(const Message &) = delete;
@@ -215,6 +219,72 @@ struct Message {
     messagePermissions = other.messagePermissions;
     return *this;
   }
+};
+
+//! Represents an identifier for a shared data flow between endpoints.
+struct DataFlowId {
+  //! The ID of the hub the data flow source endpoint is on.
+  MessageHubId hubId;
+
+  //! The ID of the data flow scoped to hubId.
+  uint32_t id;
+};
+
+//! Represents a data flow sink registration.
+struct DataFlowSinkRegistration {
+  //! Id of the data flow.
+  DataFlowId dataFlowId;
+
+  //! The data flow source endpoint.
+  Endpoint sourceId;
+
+  //! The endpoint being registered as a sink.
+  Endpoint sinkId;
+
+  //! Id of the primary region.
+  int32_t primaryRegionId;
+
+  //! Offset of the metadata in the primary region.
+  uint32_t metadataOffset;
+
+  //! Optional ID of the region containing the metadata of the new sink.
+  int32_t sinkMetadataRegionId;
+
+  //! Offset of the sink metadata.
+  uint32_t sinkMetadataOffset;
+
+  //! Optional message used to pass this registration over an existing session.
+  std::optional<Message> sessionMessage;
+};
+
+//! @brief Represents a data flow sink unregistration.
+struct DataFlowSinkUnregistration {
+  //! Id of the data flow.
+  DataFlowId dataFlowId;
+
+  //! The endpoint being removed from the flow.
+  Endpoint endpoint;
+};
+
+//! Represents a data flow stopped event.
+struct DataFlowStopped {
+  //! Id of the data flow that stopped.
+  DataFlowId dataFlowId;
+
+  //! Optional list of endpoints to notify.
+  std::optional<pw::span<Endpoint>> destinationEndpoints;
+};
+
+//! Represents a data flow alert.
+struct DataFlowAlert {
+  //! Id of the data flow the alert is associated with.
+  DataFlowId dataFlowId;
+
+  //! The sending endpoint.
+  Endpoint sender;
+
+  //! The list of receiving endpoints.
+  pw::span<Endpoint> receiverEndpoints;
 };
 
 }  // namespace chre::message

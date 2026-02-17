@@ -15,6 +15,7 @@
  */
 
 #include "chre/core/event_loop_manager.h"
+#include "chre/core/multi_threading_api_mutex.h"
 #include "chre/platform/shared/host_protocol_chre.h"
 #include "chre/platform/shared/nanoapp_load_manager.h"
 
@@ -34,8 +35,11 @@ void HostMessageHandlers::handleDebugConfiguration(
           debugConfiguration->health_monitor_failure_crash());
 }
 
+// TODO(b/475537998): Optimize callbacks to avoid unnecessary global mutex locks
 void HostMessageHandlers::finishLoadingNanoappCallback(
     SystemCallbackType /*type*/, UniquePtr<LoadNanoappCallbackData> &&cbData) {
+  auto *mutex = getMultiThreadingApiMutex();
+  mutex->unlock();
   constexpr size_t kInitialBufferSize = 48;
   ChreFlatBufferBuilder builder(kInitialBufferSize);
 
@@ -54,6 +58,7 @@ void HostMessageHandlers::finishLoadingNanoappCallback(
     sendFragmentResponse(cbData->hostClientId, cbData->transactionId,
                          cbData->fragmentId, success);
   }
+  mutex->lock();
 }
 
 void HostMessageHandlers::loadNanoappData(
@@ -108,9 +113,6 @@ void HostMessageHandlers::loadNanoappData(
       cbData->fragmentId = fragmentId;
       cbData->nanoapp = getLoadManager().releaseNanoapp();
       cbData->sendFragmentResponse = !respondBeforeStart;
-
-      LOGD("Instance ID %" PRIu16 " assigned to app ID 0x%" PRIx64,
-           cbData->nanoapp->getInstanceId(), appId);
 
       // Note that if this fails, we'll generate the error response in
       // the normal deferred callback

@@ -18,12 +18,14 @@ COMMON_CFLAGS += -I$(CHRE_PREFIX)/util/include
 COMMON_CFLAGS += -I$(PIGWEED_CHRE_DIR)/pw_log_nanoapp/public_overrides
 COMMON_CFLAGS += -I$(PIGWEED_CHRE_DIR)/pw_assert_nanoapp/public_overrides
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_allocator/public
+COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_allocator/block/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_assert/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_bytes/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_containers/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_function/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_intrusive_ptr/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_log/public
+COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_memory/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_multibuf/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_numeric/public
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/pw_polyfill/public
@@ -36,6 +38,8 @@ COMMON_CFLAGS += -I$(PIGWEED_DIR)/third_party/fuchsia/repo/sdk/lib/fit/include
 COMMON_CFLAGS += -I$(PIGWEED_DIR)/third_party/fuchsia/repo/sdk/lib/stdcompat/include
 
 COMMON_SRCS += $(PIGWEED_DIR)/pw_allocator/allocator.cc
+COMMON_SRCS += $(PIGWEED_DIR)/pw_allocator/block/basic.cc
+COMMON_SRCS += $(PIGWEED_DIR)/pw_allocator/fragmentation.cc
 COMMON_SRCS += $(PIGWEED_DIR)/pw_allocator/managed_ptr.cc
 COMMON_SRCS += $(PIGWEED_DIR)/pw_containers/intrusive_item.cc
 

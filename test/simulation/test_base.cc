@@ -32,6 +32,7 @@
 #include "pw_bluetooth_proxy/h4_packet.h"
 #include "pw_containers/vector.h"
 #include "pw_function/function.h"
+#include "pw_span/span.h"
 
 using pw::bluetooth::proxy::H4PacketWithH4;
 using pw::bluetooth::proxy::H4PacketWithHci;
@@ -52,7 +53,7 @@ namespace chre {
  * to the TestEventQueue once a fixed timeout has elapsed since the start of
  * this test.
  */
-void TestBase::SetUp() {
+void TestBase::SetUpBase(pw::span<EventLoop> eventLoops) {
   setWaitTimeout(getTimeoutNs() / 2);
 
   chre::PlatformLogSingleton::init();
@@ -65,13 +66,8 @@ void TestBase::SetUp() {
       /*br_edr_acl_credits_to_reserve=*/0);
 
   initBleSocketManager(mProxyHost.value());
-  chre::initCommon();
+  chre::initCommon(eventLoops);
   EventLoopManagerSingleton::get()->lateInit();
-
-  mChreThread = std::thread([]() {
-    registerThreadContext(&EventLoopManagerSingleton::get()->getEventLoop());
-    EventLoopManagerSingleton::get()->getEventLoop().run();
-  });
 
   auto callback = [](void *) {
     LOGE("Test timed out ...");
@@ -88,8 +84,6 @@ void TestBase::TearDown() {
   mSystemTimer.cancel();
   // Free memory allocated for event on the test queue.
   TestEventQueueSingleton::get()->flush();
-  EventLoopManagerSingleton::get()->getEventLoop().stop();
-  mChreThread.join();
 
   chre::deinitCommon();
   TestEventQueueSingleton::deinit();
@@ -99,7 +93,7 @@ void TestBase::TearDown() {
   chre::PlatformLogSingleton::deinit();
 }
 
-TEST_F(TestBase, CanLoadAndStartSingleNanoapp) {
+TEST_F(SingleThreadTestBase, CanLoadAndStartSingleNanoapp) {
   constexpr uint64_t kAppId = 0x0123456789abcdef;
   constexpr uint32_t kAppVersion = 0;
   constexpr uint32_t kAppPerms = 0;
@@ -114,32 +108,37 @@ TEST_F(TestBase, CanLoadAndStartSingleNanoapp) {
   waitForEvent(CHRE_EVENT_SIMULATION_TEST_NANOAPP_LOADED);
 }
 
-TEST_F(TestBase, CanLoadAndStartMultipleNanoapps) {
+TEST_F(SingleThreadTestBase, CanLoadAndStartMultipleNanoapps) {
   constexpr uint64_t kAppId1 = 0x123;
   constexpr uint64_t kAppId2 = 0x456;
   constexpr uint32_t kAppVersion = 0;
   constexpr uint32_t kAppPerms = 0;
-  loadNanoapp("Test nanoapp", kAppId1, kAppVersion, kAppPerms,
-              defaultNanoappStart, defaultNanoappHandleEvent,
-              defaultNanoappEnd);
-
-  loadNanoapp("Test nanoapp", kAppId2, kAppVersion, kAppPerms,
-              defaultNanoappStart, defaultNanoappHandleEvent,
-              defaultNanoappEnd);
+  TestNanoappInfo info1;
+  info1.name = "Test nanoapp 1";
+  info1.id = kAppId1;
+  info1.version = kAppVersion;
+  info1.perms = kAppPerms;
+  loadNanoapp(MakeUnique<TestNanoapp>(info1));
+  TestNanoappInfo info2;
+  info2.name = "Test nanoapp 2";
+  info2.id = kAppId2;
+  info2.version = kAppVersion;
+  info2.perms = kAppPerms;
+  loadNanoapp(MakeUnique<TestNanoapp>(info2));
 
   uint16_t id1;
-  EXPECT_TRUE(EventLoopManagerSingleton::get()
-                  ->getEventLoop()
-                  .findNanoappInstanceIdByAppId(kAppId1, &id1));
+  EXPECT_TRUE(
+      getEventLoopForRequestedPriority(NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL)
+          ->findNanoappInstanceIdByAppId(kAppId1, &id1));
   uint16_t id2;
-  EXPECT_TRUE(EventLoopManagerSingleton::get()
-                  ->getEventLoop()
-                  .findNanoappInstanceIdByAppId(kAppId2, &id2));
+  EXPECT_TRUE(
+      getEventLoopForRequestedPriority(NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL)
+          ->findNanoappInstanceIdByAppId(kAppId2, &id2));
 
   EXPECT_NE(id1, id2);
 }
 
-TEST_F(TestBase, methods) {
+TEST_F(SingleThreadTestBase, methods) {
   CREATE_CHRE_TEST_EVENT(SOME_EVENT, 0);
 
   class App : public TestNanoapp {
@@ -170,7 +169,7 @@ TEST_F(TestBase, methods) {
 }
 
 // Basic test to ensure getting ID works on start and end
-TEST_F(TestBase, GetIdOnStartAndEnd) {
+TEST_F(SingleThreadTestBase, GetIdOnStartAndEnd) {
   constexpr uint64_t kAppId = 0x1234567890abcdef;
   class App : public TestNanoapp {
    public:
@@ -201,13 +200,86 @@ TEST_F(TestBase, GetIdOnStartAndEnd) {
   unloadNanoapp(appId);
 }
 
-TEST_F(TestBase, PostEventWithNullEventIsHandledGracefully) {
+TEST_F(SingleThreadTestBase, PostEventWithNullEventIsHandledGracefully) {
   // This test verifies that calling EventLoop::postEvent with a null event
   // does not cause a crash and returns false, which is the expected behavior
   // for a failed push to the event queue.
   EventLoop &eventLoop = EventLoopManagerSingleton::get()->getEventLoop();
   bool success = eventLoop.postEvent(nullptr);
   EXPECT_FALSE(success);
+}
+
+void SingleThreadTestBase::SetUp() {
+  mEventLoop.emplace();
+  pw::span<EventLoop> span(&mEventLoop.value(), 1);
+  TestBase::SetUpBase(span);
+
+  mChreThread = std::thread([]() {
+    registerThreadContext(&EventLoopManagerSingleton::get()->getEventLoop());
+    EventLoopManagerSingleton::get()->getEventLoop().run();
+  });
+}
+
+void SingleThreadTestBase::TearDown() {
+  EventLoopManagerSingleton::get()->getEventLoop().stop();
+  mChreThread.join();
+  TestBase::TearDown();
+}
+
+template <size_t kNumEventLoops>
+void MultiThreadTestBaseT<kNumEventLoops>::SetUp() {
+  mEventLoops.emplace();
+  pw::span<EventLoop> span(mEventLoops->data(), mEventLoops->size());
+  SetUpBase(span);
+
+  ASSERT_EQ(mChreThreads.size(), mEventLoops->size());
+  for (size_t i = 0; i < mChreThreads.size(); i++) {
+    mChreThreads[i] = std::thread([i, this]() {
+      registerThreadContext(getEventLoop(i));
+      getEventLoop(i)->run();
+    });
+  }
+}
+
+template <size_t kNumEventLoops>
+void MultiThreadTestBaseT<kNumEventLoops>::TearDown() {
+  for (EventLoop &eventLoop : *mEventLoops) {
+    eventLoop.stop();
+  }
+  for (std::thread &chreThread : mChreThreads) {
+    chreThread.join();
+  }
+  TestBase::TearDown();
+}
+
+TEST_F(MultiThreadTestBase, CanLoadAndStartMultiThreadNanoapp) {
+  constexpr uint64_t kAppId1 = 0x0123456789abcdef;
+  constexpr uint32_t kAppVersion = 0;
+  constexpr uint32_t kAppPerms = 0;
+  TestNanoappInfo info1;
+  info1.name = "Test nanoapp 1";
+  info1.id = kAppId1;
+  info1.version = kAppVersion;
+  info1.perms = kAppPerms;
+  info1.requestedThreadPriority = NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL;
+  loadNanoapp(MakeUnique<TestNanoapp>(info1));
+  EXPECT_NE(
+      getEventLoopForRequestedPriority(NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL)
+          ->findNanoappByAppId(kAppId1),
+      nullptr);
+
+  constexpr uint64_t kAppId2 = 0xfedcba9876543210;
+  TestNanoappInfo info2;
+  info2.name = "Test nanoapp 2";
+  info2.id = kAppId2;
+  info2.version = kAppVersion;
+  info2.perms = kAppPerms;
+  info2.requestedThreadPriority = NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND;
+  loadNanoapp(MakeUnique<TestNanoapp>(info2));
+  EXPECT_NE(getEventLoopForRequestedPriority(
+                NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND)
+                ->findNanoappByAppId(kAppId2),
+            nullptr);
 }
 
 // Explicitly instantiate the TestEventQueueSingleton to reduce codesize.

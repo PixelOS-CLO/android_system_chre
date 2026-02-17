@@ -31,33 +31,7 @@
     <target_preparer class="com.android.tradefed.targetprep.RebootTargetPreparer" >
     </target_preparer>
 
-    <target_preparer class="com.android.tradefed.targetprep.RootTargetPreparer" >
-    </target_preparer>
-
-    <!-- Environment setup -->
-    <target_preparer class="com.android.tradefed.targetprep.DeviceSetup">
-        <option name="screen-always-on" value="on" />
-        <option name="screen-adaptive-brightness" value="off" />
-        <option name="bluetooth" value="ON" />
-        <option name="wifi" value="ON" />
-    </target_preparer>
-    <target_preparer class="com.android.tradefed.targetprep.RunCommandTargetPreparer">
-        <option name="run-command" value="settings put secure location_mode 3" />
-        <option name="run-command" value="settings put global wifi_scan_throttle_enabled 0" />
-        <!-- Cleanups -->
-        <option name="teardown-command" value="svc power stayon false" />
-        <option name="teardown-command" value="settings put global wifi_scan_throttle_enabled 1" />
-    </target_preparer>
-
-    <!-- Runtime permissions must be granted manually -->
-    <target_preparer class="com.android.tradefed.targetprep.RunCommandTargetPreparer">
-        <option name="run-command" value="pm grant com.android.chre.chdts.app android.permission.ACCESS_FINE_LOCATION" />
-        <option name="run-command" value="pm grant com.android.chre.chdts.app android.permission.ACCESS_BACKGROUND_LOCATION" />
-        <option name="run-command" value="pm grant com.android.chre.chdts.app android.permission.ACTIVITY_RECOGNITION" />
-        <option name="run-command" value="pm grant com.android.chre.chdts.app android.permission.BLUETOOTH_CONNECT" />
-        <option name="run-command" value="pm grant com.android.chre.chdts.app android.permission.BLUETOOTH_SCAN" />
-        <option name="run-command" value="pm grant com.android.chre.chdts.app android.permission.RECORD_AUDIO" />
-    </target_preparer>
+    <include name="BaseConfig.xml" />
 
     <!-- Wait 15 seconds for boot completion, to avoid probabilistic failure of testContextHubEstimatedHostTimeTest -->
     <target_preparer class="com.android.tradefed.targetprep.RunCommandTargetPreparer">

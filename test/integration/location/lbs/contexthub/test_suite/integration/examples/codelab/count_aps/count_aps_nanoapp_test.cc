@@ -59,8 +59,6 @@ class ScenarioThree : public lbs::contexthub::testing::DataFeedBase {
 
   const std::vector<chreSensorInfo> GetSensors() override { return {}; }
 
-  uint32_t GetAudioSourceCount() override { return 0; }
-
  private:
   void AddPassiveWifiScanAtTime(uint64_t t_ns, int nb_of_aps);
 };

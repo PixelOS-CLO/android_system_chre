@@ -76,16 +76,6 @@ flag {
 }
 
 flag {
-  name: "optimize_service_transaction_lock"
-  namespace: "context_hub"
-  description: "Flag guarding the optimizing of the ContextHubService transaction lock"
-  bug: "444955194"
-  metadata {
-    purpose: PURPOSE_BUGFIX
-  }
-}
-
-flag {
   name: "fmcq_api"
   namespace: "context_hub"
   description: "Enables ContextHub APIs for fast multiple-consumer queues"
@@ -105,6 +95,26 @@ flag {
   namespace: "context_hub"
   description: "Flag guarding the fix for high number host endpoints"
   bug: "450934734"
+  metadata {
+    purpose: PURPOSE_BUGFIX
+  }
+}
+
+flag {
+  name: "fmcq_share_data_flow_message_fix"
+  namespace: "context_hub"
+  description: "Flag guarding the fix for sharing a data flow with a message"
+  bug: "473871476"
+  metadata {
+    purpose: PURPOSE_BUGFIX
+  }
+}
+
+flag {
+  name: "fmcq_support_variable_sized_data_flow_fix"
+  namespace: "context_hub"
+  description: "Flag guarding the fix for supporting variable sized data flows"
+  bug: "473872044"
   metadata {
     purpose: PURPOSE_BUGFIX
   }

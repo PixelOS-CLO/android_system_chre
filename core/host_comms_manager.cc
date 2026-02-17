@@ -73,15 +73,17 @@ bool shouldAcceptMessageToHostFromNanoapp(Nanoapp *nanoapp, void *messageData,
 
 }  // namespace
 
-HostCommsManager::HostCommsManager()
+HostCommsManager::HostCommsManager(EventLoop *eventLoop)
 #ifdef CHRE_RELIABLE_MESSAGE_SUPPORT_ENABLED
     : mDuplicateMessageDetector(kReliableMessageDuplicateDetectorTimeout),
-      mTransactionManager(
-          *this,
-          EventLoopManagerSingleton::get()->getEventLoop().getTimerPool(),
-          kReliableMessageRetryWaitTime, kReliableMessageMaxAttempts)
-#endif  // CHRE_RELIABLE_MESSAGE_SUPPORT_ENABLED
+      mTransactionManager(*this,
+                          EventLoopManagerSingleton::get()->getTimerPool(),
+                          kReliableMessageRetryWaitTime, eventLoop,
+                          kReliableMessageMaxAttempts) {
+#else
 {
+  UNUSED_VAR(eventLoop);
+#endif  // CHRE_RELIABLE_MESSAGE_SUPPORT_ENABLED
 }
 
 // TODO(b/346345637): rename this to align it with the message delivery status
@@ -90,13 +92,14 @@ bool HostCommsManager::completeTransaction(
     [[maybe_unused]] uint32_t transactionId,
     [[maybe_unused]] uint8_t errorCode) {
 #ifdef CHRE_RELIABLE_MESSAGE_SUPPORT_ENABLED
-  auto callback = [](uint16_t /*type*/, void *data, void *extraData) {
-    uint32_t txnId = NestedDataPtr<uint32_t>(data);
-    uint8_t err = NestedDataPtr<uint8_t>(extraData);
-    EventLoopManagerSingleton::get()
-        ->getHostCommsManager()
-        .handleMessageDeliveryStatusSync(txnId, err);
-  };
+  auto callback = [](uint16_t /*type*/, void *data, void *extraData)
+                      CHRE_REQUIRES(getMultiThreadingApiMutex()) {
+                        uint32_t txnId = NestedDataPtr<uint32_t>(data);
+                        uint8_t err = NestedDataPtr<uint8_t>(extraData);
+                        EventLoopManagerSingleton::get()
+                            ->getHostCommsManager()
+                            .handleMessageDeliveryStatusSync(txnId, err);
+                      };
   EventLoopManagerSingleton::get()->deferCallback(
       SystemCallbackType::ReliableMessageEvent,
       NestedDataPtr<uint32_t>(transactionId), callback,
@@ -241,12 +244,14 @@ void HostCommsManager::sendMessageToNanoappFromHost(
   MessageFromHost *craftedMessage = output.second;
 
   if (error == CHRE_ERROR_NONE) {
-    auto callback = [](uint16_t /*type*/, void *data, void * /* extraData */) {
-      MessageFromHost *craftedMessage = static_cast<MessageFromHost *>(data);
-      EventLoopManagerSingleton::get()
-          ->getHostCommsManager()
-          .deliverNanoappMessageFromHost(craftedMessage);
-    };
+    auto callback = [](uint16_t /*type*/, void *data, void * /* extraData */)
+                        CHRE_REQUIRES(getMultiThreadingApiMutex()) {
+                          MessageFromHost *craftedMessage =
+                              static_cast<MessageFromHost *>(data);
+                          EventLoopManagerSingleton::get()
+                              ->getHostCommsManager()
+                              .deliverNanoappMessageFromHost(craftedMessage);
+                        };
 
     if (!EventLoopManagerSingleton::get()->deferCallback(
             SystemCallbackType::DeferredMessageToNanoappFromHost,
@@ -470,7 +475,8 @@ void HostCommsManager::handleDuplicateAndSendMessageDeliveryStatus(
 }
 
 void HostCommsManager::handleMessageDeliveryStatusSync(
-    uint32_t messageSequenceNumber, uint8_t errorCode) {
+    uint32_t messageSequenceNumber, uint8_t errorCode)
+    CHRE_REQUIRES(getMultiThreadingApiMutex()) {
   EventLoop &eventLoop = EventLoopManagerSingleton::get()->getEventLoop();
   uint16_t nanoappInstanceId;
   MessageToHost *message = findMessageToHostBySeq(messageSequenceNumber);
@@ -510,21 +516,25 @@ void HostCommsManager::onMessageToHostCompleteInternal(
   // EventLoop context.
   if (msgToHost->toHostData.nanoappFreeFunction == nullptr) {
     mMessagePool.deallocate(msgToHost);
-  } else if (EventLoopManagerSingleton::get()->inEventLoopForNanoapp(
-                 msgToHost->appId)) {
-    // If we're already within the event loop context, it is safe to call the
-    // free callback synchronously.
-    freeMessageToHost(msgToHost);
   } else {
-    auto freeMsgCallback = [](uint16_t /*type*/, void *data,
-                              void * /*extraData*/) {
-      EventLoopManagerSingleton::get()->getHostCommsManager().freeMessageToHost(
-          static_cast<MessageToHost *>(data));
-    };
+    auto freeMsgCallback =
+        [](uint16_t /*type*/, void *data,
+           void * /*extraData*/) CHRE_NO_THREAD_SAFETY_ANALYSIS {
+          // TODO(b/475537998): Optimize the global API mutex locking in this
+          // code path.
+          auto *lock = EventLoopManagerSingleton::get()->getGlobalApiMutex();
+          lock->unlock();
+          EventLoopManagerSingleton::get()
+              ->getHostCommsManager()
+              .freeMessageToHost(static_cast<MessageToHost *>(data));
+          lock->lock();
+        };
 
     if (!EventLoopManagerSingleton::get()->deferCallback(
             SystemCallbackType::MessageToHostComplete, msgToHost,
-            freeMsgCallback)) {
+            freeMsgCallback,
+            EventLoopManagerSingleton::get()->getEventLoopByAppId(
+                msgToHost->appId))) {
       freeMessageToHost(static_cast<MessageToHost *>(msgToHost));
     }
   }

@@ -31,6 +31,7 @@
 #include "chre/core/settings.h"
 #include "chre/core/system_health_monitor.h"
 #include "chre/core/telemetry_manager.h"
+#include "chre/core/timer_pool.h"
 #include "chre/core/wifi_request_manager.h"
 #include "chre/core/wwan_request_manager.h"
 #include "chre/platform/atomic.h"
@@ -99,18 +100,14 @@ class EventLoopManager : public NonCopyable {
                    WwanRequestManager *wwanRequestManager,
                    ChreMessageHubManager *chreMessageHubManager,
                    HostMessageHubManager *hostMessageHubManager)
-      : mEventLoops(eventLoops),
+      : mEventLoops(checkEventLoops(eventLoops)),
         mBleSocketManager(bleSocketManager),
         mGnssManager(gnssManager),
+        mHostCommsManager(&getEventLoop()),
         mWifiRequestManager(wifiRequestManager),
         mWwanRequestManager(wwanRequestManager),
         mChreMessageHubManager(chreMessageHubManager),
         mHostMessageHubManager(hostMessageHubManager) {
-#ifdef CHRE_MULTI_THREADING_ENABLED
-    CHRE_ASSERT(mEventLoops.size() > 0);
-#else
-    CHRE_ASSERT(mEventLoops.size() == 1);
-#endif  // CHRE_MULTI_THREADING_ENABLED
 #ifdef CHRE_BLE_SOCKET_SUPPORT_ENABLED
     CHRE_ASSERT(mBleSocketManager != nullptr);
 #endif  // CHRE_BLE_SOCKET_SUPPORT_ENABLED
@@ -154,6 +151,26 @@ class EventLoopManager : public NonCopyable {
    *         nanoapp; false otherwise
    */
   static bool inEventLoopForNanoapp(uint64_t appId);
+
+  /**
+   * Returns a pointer to the EventLoop that manages the nanoapp with the given
+   * app ID.
+   *
+   * @param appId The app ID of the nanoapp to search for.
+   * @return A pointer to the EventLoop that manages the nanoapp, or nullptr if
+   *         no such nanoapp is found.
+   */
+  EventLoop *getEventLoopByAppId(uint64_t appId);
+
+  /**
+   * Returns a pointer to the EventLoop that manages the nanoapp with the given
+   * instance ID.
+   *
+   * @param nanoappInstanceId The instance ID of the nanoapp to search for.
+   * @return A pointer to the EventLoop that manages the nanoapp, or nullptr if
+   *         no such nanoapp is found.
+   */
+  EventLoop *getEventLoopByInstanceId(uint16_t instanceId);
 
   /**
    * Posts an event to a nanoapp that is currently running (or all nanoapps if
@@ -369,6 +386,11 @@ class EventLoopManager : public NonCopyable {
   }
 
   /**
+   * @return true if there is an event pending to be processed.
+   */
+  bool isEventPending();
+
+  /**
    * Schedules a CHRE system callback to be invoked at some point in the future
    * after a specified amount of time, in the context of the "main" CHRE
    * EventLoop.
@@ -397,8 +419,8 @@ class EventLoopManager : public NonCopyable {
     if (eventLoop == nullptr) {
       eventLoop = &getEventLoop();
     }
-    return eventLoop->getTimerPool().setSystemTimer(delay, callback, type,
-                                                    data);
+    return getTimerPool().setSystemTimer(delay, callback, type, data,
+                                         eventLoop);
   }
 
   /**
@@ -409,18 +431,11 @@ class EventLoopManager : public NonCopyable {
    * @param timerHandle The TimerHandle returned by setDelayedCallback
    * @param index An optional parameter to specify the index of the event loop
    * to cancel delayed callback for.
-   * @param eventLoop An optional pointer to specify the event loop to cancel
-   * the callback. If null, the timer will be cancelled on the default event
-   * loop.
    *
    * @return true if the callback was successfully cancelled
    */
-  bool cancelDelayedCallback(TimerHandle timerHandle,
-                             EventLoop *eventLoop = nullptr) {
-    if (eventLoop == nullptr) {
-      eventLoop = &getEventLoop();
-    }
-    return eventLoop->getTimerPool().cancelSystemTimer(timerHandle);
+  bool cancelDelayedCallback(TimerHandle timerHandle) {
+    return getTimerPool().cancelSystemTimer(timerHandle);
   }
 
   /**
@@ -467,6 +482,24 @@ class EventLoopManager : public NonCopyable {
    */
   EventLoop &getEventLoop() {
     return mEventLoops[0];
+  }
+
+  /**
+   * Returns the "next" event loop after the provided event loop based on the
+   * EventLoopManager's internal storage of event loops. This can be useful if
+   * the user wishes to operate for each event loop in a round-robin way given
+   * the default event loop as a starting point.
+   *
+   * @param current The current event loop.
+   * @return The "next" event loop in the internal event loop list.
+   */
+  EventLoop *getNextEventLoop(EventLoop *current) {
+    for (size_t i = 0; i < mEventLoops.size(); ++i) {
+      if (&mEventLoops[i] == current && i < mEventLoops.size() - 1) {
+        return &mEventLoops[i + 1];
+      }
+    }
+    return nullptr;
   }
 
   /**
@@ -564,13 +597,126 @@ class EventLoopManager : public NonCopyable {
   }
 
   /**
+   * @return The global timer pool.
+   */
+  TimerPool &getTimerPool() {
+    return mTimerPool;
+  }
+
+  /**
    * Performs second-stage initialization of things that are not necessarily
    * required at construction time but need to be completed prior to executing
    * any nanoapps.
    */
   void lateInit();
 
+  /**
+   * An internal representation of a nanoapp's instance ID, incorporating the
+   * event loop index.
+   *
+   * This struct is used to pack both the nanoapp's unique instance ID and the
+   * index of the EventLoop it belongs to into a single uint16_t. This allows
+   * for efficient routing of events to the correct EventLoop and nanoapp.
+   *
+   * The instanceId field uniquely identifies a nanoapp within its EventLoop.
+   * The eventLoopIndex field identifies which EventLoop the nanoapp is
+   * associated with in a multi-threaded CHRE environment.
+   */
+  struct NanoappInstanceId {
+    //! The number of bits allocated for the nanoapp's instance ID.
+    static constexpr size_t kInstanceIdBits = 12;
+    //! The number of bits allocated for the EventLoop index.
+    static constexpr size_t kEventLoopIndexBits = 4;
+
+    union {
+      struct {
+        uint16_t instanceId : kInstanceIdBits;
+        uint16_t eventLoopIndex : kEventLoopIndexBits;
+      };
+      uint16_t instanceIdAndEventLoopIndex;
+    };
+    static constexpr uint16_t kMaxPureInstanceId = (1 << kInstanceIdBits) - 1;
+    static constexpr uint16_t kMaxEventLoopIndex =
+        (1 << kEventLoopIndexBits) - 1;
+  };
+
+  /**
+   * @return The global API mutex used to synchronizes resources for CHRE API
+   * calls from multiple threads, or no-op if multi-threading is not enabled.
+   */
+  MultiThreadingApiMutex *getGlobalApiMutex() {
+    return &mGlobalApiMutex;
+  }
+
+  /**
+   * @return The BLE capabilities. This function must be called with the global
+   * API mutex locked.
+   */
+  uint32_t getBleCapabilitiesLocked();
+
+  /**
+Same as chreBleGetFilterCapabilities, but must be called with the global API
+   * mutex locked.
+   *
+   * @return The BLE filter capabilities.
+   */
+  uint32_t getBleFilterCapabilitiesLocked();
+
+  /**
+   * Same as chreWifiGetCapabilities, but must be called with the global API
+   * mutex locked.
+   *
+   * @return The WiFi capabilities.
+   */
+  uint32_t getWifiCapabilitiesLocked();
+
+  /**
+   * Same as chreGnssGetCapabilities, but must be called with the global API
+   * mutex locked.
+   *
+   * @return The GNSS capabilities.
+   */
+  uint32_t getGnssCapabilitiesLocked();
+
+  /**
+   * Same as chreWwanGetCapabilities, but must be called with the global API
+   * mutex locked.
+   *
+   * @return The WWAN capabilities.
+   */
+  uint32_t getWwanCapabilitiesLocked();
+
  private:
+  /**
+   * Posts an event to a specific event loop.
+   *
+   * @param loop The EventLoop to post the event to.
+   * @param event The event to post. The ownership of the event is transferred
+   *        to the event loop if successfully posted.
+   * @param isLowPriority true if the event is low priority, false otherwise.
+   *
+   * @return true if the event was successfully added to the queue of the
+   *         specified event loop, false otherwise.
+   */
+  bool postEventToLoop(EventLoop &loop, Event *event, bool isLowPriority);
+
+  /**
+   * Static function to check the event loop argument.
+   */
+  static pw::span<EventLoop> checkEventLoops(pw::span<EventLoop> eventLoops) {
+#ifdef CHRE_MULTI_THREADING_ENABLED
+    CHRE_ASSERT(eventLoops.size() > 0);
+#else
+    CHRE_ASSERT(eventLoops.size() == 1);
+#endif  // CHRE_MULTI_THREADING_ENABLED
+    return eventLoops;
+  }
+
+  //! The global timer pool used schedule timed events.
+  //! Note: the TimerPool must be initialized first to allow any other members
+  //! of the EventLoopManager to access it during initialization.
+  TimerPool mTimerPool;
+
 #ifdef CHRE_STATIC_EVENT_LOOP
   //! The maximum number of events that can be active in the system.
   static constexpr size_t kMaxEventCount = CHRE_MAX_EVENT_COUNT;
@@ -589,9 +735,6 @@ class EventLoopManager : public NonCopyable {
   SynchronizedExpandableMemoryPool<Event, kEventPerBlock, kMaxEventBlock>
       mEventPool;
 #endif
-
-  //! The instance ID generated by getNextInstanceId().
-  AtomicUint32 mNextInstanceId{kSystemInstanceId + 1};
 
   //! The event loops managed by this event loop manager.
   pw::span<EventLoop> mEventLoops;
@@ -657,6 +800,10 @@ class EventLoopManager : public NonCopyable {
 
   //! The HostMessageHubManager handling communication with host message hubs.
   HostMessageHubManager *mHostMessageHubManager = nullptr;
+
+  //! A global mutex used to synchronize concurrent CHRE API calls across
+  //! potentially multiple threads, or no-op if multi-threading is not enabled.
+  MultiThreadingApiMutex mGlobalApiMutex;
 };
 
 //! Provide an alias to the EventLoopManager singleton.
@@ -671,6 +818,19 @@ inline SensorRequestManager &getSensorRequestManager() {
   return EventLoopManagerSingleton::get()->getSensorRequestManager();
 }
 #endif  // CHRE_SENSORS_SUPPORT_ENABLED
+
+/**
+ * A convenience class to acquire and release the global API mutex.
+ * This is useful for synchronizing access to CHRE resources when multiple
+ * threads might be calling CHRE APIs.
+ * The lock is acquired upon construction and released upon destruction.
+ */
+class GlobalApiLockGuard : public LockGuard<MultiThreadingApiMutex> {
+ public:
+  GlobalApiLockGuard()
+      : LockGuard<MultiThreadingApiMutex>(
+            *EventLoopManagerSingleton::get()->getGlobalApiMutex()) {}
+};
 
 }  // namespace chre
 
