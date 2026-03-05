@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 The Android Open Source Project
+ * Copyright (C) 2026 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,15 +14,20 @@
  * limitations under the License.
  */
 
-#include <cinttypes>
+#pragma once
 
-#include "chre_api/chre.h"
+#include <atomic>
 
-void nanoappHandleEvent(uint32_t /*senderInstanceId*/, uint16_t /*eventType*/,
-                        const void * /*eventData*/) {}
+namespace chre {
 
-bool nanoappStart(void) {
-  return true;
-}
+/** Implementation of AtomicUint32RefBase using std::atomic_ref. */
+class AtomicUint32RefBase {
+ public:
+  explicit AtomicUint32RefBase(uint32_t &object) : mAtomic(object) {}
 
-void nanoappEnd(void) {}
+ protected:
+  //! The underlying std::atomic_ref.
+  std::atomic_ref<uint32_t> mAtomic;
+};
+
+}  // namespace chre

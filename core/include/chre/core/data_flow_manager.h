@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 The Android Open Source Project
+ * Copyright (C) 2026 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,15 +14,27 @@
  * limitations under the License.
  */
 
-#include <cinttypes>
+#ifndef CHRE_CORE_DATA_FLOW_MANAGER_H_
+#define CHRE_CORE_DATA_FLOW_MANAGER_H_
 
-#include "chre_api/chre.h"
+#ifdef CHRE_DATA_FLOW_SUPPORT_ENABLED
 
-void nanoappHandleEvent(uint32_t /*senderInstanceId*/, uint16_t /*eventType*/,
-                        const void * /*eventData*/) {}
+#include "chre/util/non_copyable.h"
 
-bool nanoappStart(void) {
-  return true;
-}
+namespace chre {
 
-void nanoappEnd(void) {}
+//! Manager class for data flow support in CHRE.
+class DataFlowManager : public NonCopyable {
+ public:
+  DataFlowManager() = default;
+  ~DataFlowManager() = default;
+
+  //! Initializes the DataFlowManager.
+  void init();
+};
+
+}  // namespace chre
+
+#endif  // CHRE_DATA_FLOW_SUPPORT_ENABLED
+
+#endif  // CHRE_CORE_DATA_FLOW_MANAGER_H_

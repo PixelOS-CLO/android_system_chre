@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021 The Android Open Source Project
+ * Copyright (C) 2026 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,15 +14,14 @@
  * limitations under the License.
  */
 
-#include <cinttypes>
+#ifdef CHRE_DATA_FLOW_SUPPORT_ENABLED
 
-#include "chre_api/chre.h"
+#include "chre/core/data_flow_manager.h"
 
-void nanoappHandleEvent(uint32_t /*senderInstanceId*/, uint16_t /*eventType*/,
-                        const void * /*eventData*/) {}
+namespace chre {
 
-bool nanoappStart(void) {
-  return true;
-}
+void DataFlowManager::init() {}
 
-void nanoappEnd(void) {}
+}  // namespace chre
+
+#endif  // CHRE_DATA_FLOW_SUPPORT_ENABLED
