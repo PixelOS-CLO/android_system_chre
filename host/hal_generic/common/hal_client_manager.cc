@@ -15,6 +15,7 @@
  */
 #include "hal_client_manager.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <fstream>
 
@@ -529,6 +530,18 @@ HalClientManager::getNanoappInfoFromPendingLoadTransaction(
   }
   return std::make_optional<PendingLoadNanoappInfo>(
       mPendingLoadTransaction->getNanoappInfo());
+}
+
+std::optional<HalClientManager::PendingTransaction>
+HalClientManager::getPendingLoadTransaction() {
+  const std::lock_guard<std::mutex> lock(mLock);
+  return mPendingLoadTransaction;
+}
+
+std::optional<HalClientManager::PendingTransaction>
+HalClientManager::getPendingUnloadTransaction() {
+  const std::lock_guard<std::mutex> lock(mLock);
+  return mPendingUnloadTransaction;
 }
 
 void HalClientManager::resetPendingLoadTransaction() {
