@@ -49,7 +49,6 @@ DLL_EXPORT bool chreMsgGetEndpointInfo(uint64_t hubId, uint64_t endpointId,
                                        struct chreMsgEndpointInfo *info) {
 #ifdef CHRE_MESSAGE_ROUTER_SUPPORT_ENABLED
   chreMsgPreApiCall();
-  EventLoopManager::validateChreApiCall(__func__);
   GlobalApiLockGuard lock;
   return info != nullptr && EventLoopManagerSingleton::get()
                                 ->getChreMessageHubManager()
@@ -106,8 +105,8 @@ DLL_EXPORT bool chreMsgSessionGetInfo(uint16_t sessionId,
                                       struct chreMsgSessionInfo *info) {
 #ifdef CHRE_MESSAGE_ROUTER_SUPPORT_ENABLED
   chreMsgPreApiCall();
-  Nanoapp *nanoapp = EventLoopManager::validateChreApiCall(__func__);
   GlobalApiLockGuard lock;
+  Nanoapp *nanoapp = EventLoopManager::validateChreApiCall(__func__);
   return info != nullptr &&
          EventLoopManagerSingleton::get()
              ->getChreMessageHubManager()
@@ -123,8 +122,8 @@ DLL_EXPORT bool chreMsgPublishServices(
     const struct chreMsgServiceInfo *services, size_t numServices) {
 #ifdef CHRE_MESSAGE_ROUTER_SUPPORT_ENABLED
   chreMsgPreApiCall();
-  Nanoapp *nanoapp = EventLoopManager::validateChreApiCall(__func__);
   GlobalApiLockGuard lock;
+  Nanoapp *nanoapp = EventLoopManager::validateChreApiCall(__func__);
   return EventLoopManagerSingleton::get()
       ->getChreMessageHubManager()
       .publishServices(nanoapp->getAppId(), services, numServices);
@@ -139,8 +138,8 @@ DLL_EXPORT bool chreMsgSessionOpenAsync(uint64_t hubId, uint64_t endpointId,
                                         const char *serviceDescriptor) {
 #ifdef CHRE_MESSAGE_ROUTER_SUPPORT_ENABLED
   chreMsgPreApiCall();
-  Nanoapp *nanoapp = EventLoopManager::validateChreApiCall(__func__);
   GlobalApiLockGuard lock;
+  Nanoapp *nanoapp = EventLoopManager::validateChreApiCall(__func__);
   return EventLoopManagerSingleton::get()
       ->getChreMessageHubManager()
       .openDefaultSessionAsync(nanoapp->getAppId(), hubId, endpointId,
@@ -156,8 +155,8 @@ DLL_EXPORT bool chreMsgSessionOpenAsync(uint64_t hubId, uint64_t endpointId,
 DLL_EXPORT bool chreMsgSessionCloseAsync(uint16_t sessionId) {
 #ifdef CHRE_MESSAGE_ROUTER_SUPPORT_ENABLED
   chreMsgPreApiCall();
-  Nanoapp *nanoapp = EventLoopManager::validateChreApiCall(__func__);
   GlobalApiLockGuard lock;
+  Nanoapp *nanoapp = EventLoopManager::validateChreApiCall(__func__);
   return EventLoopManagerSingleton::get()
       ->getChreMessageHubManager()
       .closeSession(nanoapp->getAppId(), sessionId);
@@ -177,8 +176,8 @@ DLL_EXPORT bool chreMsgSend(void *message, size_t messageSize,
   {
     // Note that we place the GlobalApiLockGuard here to avoid holding
     // the lock when freeCallback is invoked.
-    Nanoapp *nanoapp = EventLoopManager::validateChreApiCall(__func__);
     GlobalApiLockGuard lock;
+    Nanoapp *nanoapp = EventLoopManager::validateChreApiCall(__func__);
     success =
         EventLoopManagerSingleton::get()
             ->getChreMessageHubManager()

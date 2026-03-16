@@ -148,7 +148,7 @@ pw::Result<BlockHeader *> allocateBlockRing(const AllocatorRegion &region,
  */
 void notify(IdOrNotifyFn &idOrNotifyFn, const RemoteNotifyFn &remoteNotifyFn) {
   if (remoteNotifyFn) {
-    remoteNotifyFn(idOrNotifyFn.remoteId);
+    remoteNotifyFn(pw::ConstByteSpan(idOrNotifyFn.remoteId));
   } else {
     idOrNotifyFn.localNotify.fn(idOrNotifyFn.localNotify.ctx);
   }
@@ -781,7 +781,7 @@ void ProducerBase::notifyConsumer(ConsumerDesc &desc) {
   notify(*reinterpret_cast<IdOrNotifyFn *>(&desc.id), mRemoteNotifyFn);
 }
 
-pw::Result<uint32_t> ProducerBase::addConsumer(const RemoteEndpointId &id,
+pw::Result<uint32_t> ProducerBase::addConsumer(pw::ConstByteSpan id,
                                                const AllocatorRegion &region,
                                                ConsumerPolicy policy) {
   PW_TRY(checkActive());
@@ -806,7 +806,7 @@ pw::Result<uint32_t> ProducerBase::addConsumer(const RemoteEndpointId &id,
   node->policy = policy;
   // Initialize the descriptor.
   std::memset(desc, 0, sizeof(internal::ConsumerDesc));
-  std::memcpy(&desc->id, &id, sizeof(id));
+  std::memcpy(&desc->id, id.data(), id.size());
   // Let the consumer know if they are overwritable.
   desc->isOverwritable = policy.overwrite == OverwritePolicy::kAllowed;
   ::chre::AtomicUint32Ref(desc->sinkFlags)
@@ -827,13 +827,14 @@ pw::Result<uint32_t> ProducerBase::addConsumer(const RemoteEndpointId &id,
   return toOffset(region.base, desc);
 }
 
-pw::Status ProducerBase::updateConsumerPolicy(const RemoteEndpointId &id,
+pw::Status ProducerBase::updateConsumerPolicy(pw::ConstByteSpan id,
                                               ConsumerPolicy policy) {
   ScopedMemoryAccess memAccessScope(mMemAccess, mMemAccessCnt);
   PW_TRY(checkPolicy(policy));
   for (auto node = mQueue->consumerList.begin();
        node != mQueue->consumerList.end();) {
-    if (!std::memcmp(&node->id, &id, sizeof(id))) {
+    if (id.size() == node->id.size() &&
+        !std::memcmp(node->id.data(), id.data(), id.size())) {
       node->policy = policy;
       node->desc->isOverwritable =
           policy.overwrite == OverwritePolicy::kAllowed;
@@ -846,7 +847,7 @@ pw::Status ProducerBase::updateConsumerPolicy(const RemoteEndpointId &id,
 }
 
 pw::Status ProducerBase::pruneConsumers(
-    const pw::Function<bool(const RemoteEndpointId &id)> &match) {
+    const pw::Function<bool(pw::ConstByteSpan id)> &match) {
   if (mState == State::kMovedFrom) {
     PW_LOG_ERROR("ProducerBase::pruneConsumers: Moved-from instance");
     return pw::Status::FailedPrecondition();

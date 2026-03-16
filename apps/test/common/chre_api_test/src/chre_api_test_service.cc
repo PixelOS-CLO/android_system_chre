@@ -186,17 +186,14 @@ bool ChreApiTestService::validateInputAndCallChreBleStartScanAsyncV1_9(
 
   auto genericFilters = chre::MakeUniqueArray<chreBleGenericFilter[]>(
       request.filter.genericFilters_count);
-  if (request.filter.genericFilters_count != 0) {
-    if (genericFilters.isNull()) {
-      LOG_OOM();
-      return false;
-    }
-    if (!validateBleScanFilters(request.filter.genericFilters,
-                                genericFilters.get(),
-                                request.filter.genericFilters_count)) {
-      LOGE("BLE scan generic filter validation failed");
-      return false;
-    }
+  if (request.filter.genericFilters_count != 0 && genericFilters.isNull()) {
+    LOG_OOM();
+    return false;
+  }
+  if (!validateBleScanFilters(request.filter.genericFilters,
+                              genericFilters.get(),
+                              request.filter.genericFilters_count)) {
+    return false;
   }
   auto broadcasterAddressFilters =
       chre::MakeUniqueArray<chreBleBroadcasterAddressFilter[]>(

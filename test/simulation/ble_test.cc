@@ -43,17 +43,10 @@ CREATE_CHRE_TEST_EVENT(RSSI_REQUEST, 6);
 CREATE_CHRE_TEST_EVENT(RSSI_REQUEST_SENT, 7);
 
 class BleTest : public SingleThreadTestBase {};
-class BleTestMultiThread : public MultiThreadTestBase {};
 
 class BleTestNanoapp : public TestNanoapp {
  public:
-  explicit BleTestNanoapp(TestNanoappInfo info = {})
-      : TestNanoapp(updateInfo(info)) {}
-
-  static TestNanoappInfo updateInfo(TestNanoappInfo info) {
-    info.perms |= CHRE_PERMS_BLE;
-    return info;
-  }
+  BleTestNanoapp() : TestNanoapp(TestNanoappInfo{.perms = CHRE_PERMS_BLE}) {}
 
   bool start() override {
     chreUserSettingConfigureEvents(CHRE_USER_SETTING_BLE_AVAILABLE,
@@ -176,25 +169,25 @@ class BleTestNanoapp : public TestNanoapp {
   uint32_t mCookie = 0;
 };
 
-void assertStartScanSuccess(TestBase *test, const uint64_t appId,
+void assertStartScanSuccess(const uint64_t appId,
                             const uint32_t reportDelayMs = 0) {
   bool success;
   sendEventToNanoapp(appId, START_SCAN, NestedDataPtr(reportDelayMs));
-  test->waitForEvent(START_SCAN, &success);
+  TestBase::waitForEvent(START_SCAN, &success);
   ASSERT_TRUE(success);
   chreAsyncResult result{};
-  test->waitForEvent(CHRE_EVENT_BLE_ASYNC_RESULT, &result);
+  TestBase::waitForEvent(CHRE_EVENT_BLE_ASYNC_RESULT, &result);
   ASSERT_EQ(result.errorCode, CHRE_ERROR_NONE);
   ASSERT_TRUE(chrePalIsBleEnabled());
 }
 
-void assertStopScanSuccess(TestBase *test, const uint64_t appId) {
+void assertStopScanSuccess(const uint64_t appId) {
   bool success;
   sendEventToNanoapp(appId, STOP_SCAN);
-  test->waitForEvent(STOP_SCAN, &success);
+  TestBase::waitForEvent(STOP_SCAN, &success);
   ASSERT_TRUE(success);
   chreAsyncResult result{};
-  test->waitForEvent(CHRE_EVENT_BLE_ASYNC_RESULT, &result);
+  TestBase::waitForEvent(CHRE_EVENT_BLE_ASYNC_RESULT, &result);
   ASSERT_EQ(result.errorCode, CHRE_ERROR_NONE);
   ASSERT_FALSE(chrePalIsBleEnabled());
 }
@@ -204,18 +197,15 @@ void assertStopScanSuccess(TestBase *test, const uint64_t appId) {
  * capabilities. Note that a nanoapp does not require BLE permissions to use
  * these APIs.
  */
-void doBleCapabilitiesTest(TestBase *test, int8_t requestedThreadPriority) {
+TEST_F(BleTest, BleCapabilitiesTest) {
   CREATE_CHRE_TEST_EVENT(GET_CAPABILITIES, 0);
   CREATE_CHRE_TEST_EVENT(GET_FILTER_CAPABILITIES, 1);
 
   class App : public TestNanoapp {
    public:
-    explicit App(TestNanoappInfo info = {}) : TestNanoapp(updateInfo(info)) {}
-
-    static TestNanoappInfo updateInfo(TestNanoappInfo info) {
-      info.perms |= NanoappPermissions::CHRE_PERMS_WIFI;
-      return info;
-    }
+    App()
+        : TestNanoapp(
+              TestNanoappInfo{.perms = NanoappPermissions::CHRE_PERMS_WIFI}) {}
 
     void handleEvent(uint32_t, uint16_t eventType,
                      const void *eventData) override {
@@ -240,109 +230,53 @@ void doBleCapabilitiesTest(TestBase *test, int8_t requestedThreadPriority) {
     }
   };
 
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<App>(info));
+  uint64_t appId = loadNanoapp(MakeUnique<App>());
 
   uint32_t capabilities;
   sendEventToNanoapp(appId, GET_CAPABILITIES);
-  test->waitForEvent(GET_CAPABILITIES, &capabilities);
+  waitForEvent(GET_CAPABILITIES, &capabilities);
   ASSERT_EQ(capabilities, CHRE_BLE_CAPABILITIES_SCAN |
                               CHRE_BLE_CAPABILITIES_SCAN_RESULT_BATCHING |
                               CHRE_BLE_CAPABILITIES_SCAN_FILTER_BEST_EFFORT);
 
   sendEventToNanoapp(appId, GET_FILTER_CAPABILITIES);
-  test->waitForEvent(GET_FILTER_CAPABILITIES, &capabilities);
+  waitForEvent(GET_FILTER_CAPABILITIES, &capabilities);
   ASSERT_EQ(capabilities, CHRE_BLE_FILTER_CAPABILITIES_RSSI |
                               CHRE_BLE_FILTER_CAPABILITIES_SERVICE_DATA);
-}
-
-TEST_F(BleTest, BleCapabilitiesTest) {
-  doBleCapabilitiesTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleCapabilitiesTest) {
-  doBleCapabilitiesTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleCapabilitiesTestForeground) {
-  doBleCapabilitiesTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
 }
 
 /**
  * This test validates the case in which a nanoapp starts a scan, receives
  * at least one advertisement event, and stops a scan.
  */
-void doBleSimpleScanTest(TestBase *test, int8_t requestedThreadPriority) {
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<BleTestNanoapp>(info));
-
-  assertStartScanSuccess(test, appId);
-  test->waitForEvent(CHRE_EVENT_BLE_ADVERTISEMENT);
-  assertStopScanSuccess(test, appId);
-}
-
 TEST_F(BleTest, BleSimpleScanTest) {
-  doBleSimpleScanTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
+  uint64_t appId = loadNanoapp(MakeUnique<BleTestNanoapp>());
 
-TEST_F(BleTestMultiThread, BleSimpleScanTest) {
-  doBleSimpleScanTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleSimpleScanTestForeground) {
-  doBleSimpleScanTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
-}
-
-void doBleStopScanOnUnload(TestBase *test, int8_t requestedThreadPriority) {
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<BleTestNanoapp>(info));
-  assertStartScanSuccess(test, appId);
-  test->unloadNanoapp(appId);
-  ASSERT_FALSE(chrePalIsBleEnabled());
+  assertStartScanSuccess(appId);
+  waitForEvent(CHRE_EVENT_BLE_ADVERTISEMENT);
+  assertStopScanSuccess(appId);
 }
 
 TEST_F(BleTest, BleStopScanOnUnload) {
-  doBleStopScanOnUnload(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleStopScanOnUnload) {
-  doBleStopScanOnUnload(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleStopScanOnUnloadForeground) {
-  doBleStopScanOnUnload(this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
+  uint64_t appId = loadNanoapp(MakeUnique<BleTestNanoapp>());
+  assertStartScanSuccess(appId);
+  unloadNanoapp(appId);
+  ASSERT_FALSE(chrePalIsBleEnabled());
 }
 
 /**
  * This test validates that a nanoapp can start a scan twice and the platform
  * will be enabled.
  */
-void doBleStartTwiceScanTest(TestBase *test, int8_t requestedThreadPriority) {
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<BleTestNanoapp>(info));
-
-  assertStartScanSuccess(test, appId);  // First scan
-  assertStartScanSuccess(test, appId);  // Second scan
-
-  test->waitForEvent(CHRE_EVENT_BLE_ADVERTISEMENT);
-
-  assertStopScanSuccess(test, appId);
-}
-
 TEST_F(BleTest, BleStartTwiceScanTest) {
-  doBleStartTwiceScanTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
+  uint64_t appId = loadNanoapp(MakeUnique<BleTestNanoapp>());
 
-TEST_F(BleTestMultiThread, BleStartTwiceScanTest) {
-  doBleStartTwiceScanTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
+  assertStartScanSuccess(appId);  // First scan
+  assertStartScanSuccess(appId);  // Second scan
 
-TEST_F(BleTestMultiThread, BleStartTwiceScanTestForeground) {
-  doBleStartTwiceScanTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
+  waitForEvent(CHRE_EVENT_BLE_ADVERTISEMENT);
+
+  assertStopScanSuccess(appId);
 }
 
 /**
@@ -350,25 +284,11 @@ TEST_F(BleTestMultiThread, BleStartTwiceScanTestForeground) {
  * any ongoing scan existing. It asserts that the nanoapp did not receive any
  * advertisment events because a scan was never started.
  */
-void doBleStopTwiceScanTest(TestBase *test, int8_t requestedThreadPriority) {
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<BleTestNanoapp>(info));
-  assertStopScanSuccess(test, appId);
-  assertStopScanSuccess(test, appId);
-  test->unloadNanoapp(appId);
-}
-
 TEST_F(BleTest, BleStopTwiceScanTest) {
-  doBleStopTwiceScanTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleStopTwiceScanTest) {
-  doBleStopTwiceScanTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleStopTwiceScanTestForeground) {
-  doBleStopTwiceScanTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
+  uint64_t appId = loadNanoapp(MakeUnique<BleTestNanoapp>());
+  assertStopScanSuccess(appId);
+  assertStopScanSuccess(appId);
+  unloadNanoapp(appId);
 }
 
 /**
@@ -378,19 +298,17 @@ TEST_F(BleTestMultiThread, BleStopTwiceScanTestForeground) {
  * 3) Toggle BLE setting -> enabled.
  * 4) Verify things resume.
  */
-void doBleSettingChangeTest(TestBase *test, int8_t requestedThreadPriority) {
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<BleTestNanoapp>(info));
+TEST_F(BleTest, BleSettingChangeTest) {
+  uint64_t appId = loadNanoapp(MakeUnique<BleTestNanoapp>());
 
-  assertStartScanSuccess(test, appId);
+  assertStartScanSuccess(appId);
 
-  test->waitForEvent(CHRE_EVENT_BLE_ADVERTISEMENT);
+  waitForEvent(CHRE_EVENT_BLE_ADVERTISEMENT);
 
   EventLoopManagerSingleton::get()->getSettingManager().postSettingChange(
       Setting::BLE_AVAILABLE, false /* enabled */);
   bool enabled;
-  test->waitForEvent(CHRE_EVENT_SETTING_CHANGED_BLE_AVAILABLE, &enabled);
+  waitForEvent(CHRE_EVENT_SETTING_CHANGED_BLE_AVAILABLE, &enabled);
   EXPECT_FALSE(enabled);
   EXPECT_FALSE(
       EventLoopManagerSingleton::get()->getSettingManager().getSettingEnabled(
@@ -400,139 +318,74 @@ void doBleSettingChangeTest(TestBase *test, int8_t requestedThreadPriority) {
 
   EventLoopManagerSingleton::get()->getSettingManager().postSettingChange(
       Setting::BLE_AVAILABLE, true /* enabled */);
-  test->waitForEvent(CHRE_EVENT_SETTING_CHANGED_BLE_AVAILABLE, &enabled);
+  waitForEvent(CHRE_EVENT_SETTING_CHANGED_BLE_AVAILABLE, &enabled);
   EXPECT_TRUE(enabled);
   EXPECT_TRUE(
       EventLoopManagerSingleton::get()->getSettingManager().getSettingEnabled(
           Setting::BLE_AVAILABLE));
-  test->waitForEvent(CHRE_EVENT_BLE_ADVERTISEMENT);
+  waitForEvent(CHRE_EVENT_BLE_ADVERTISEMENT);
   EXPECT_TRUE(chrePalIsBleEnabled());
-
-  assertStopScanSuccess(test, appId);
-  test->unloadNanoapp(appId);
-}
-
-TEST_F(BleTest, BleSettingChangeTest) {
-  doBleSettingChangeTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleSettingChangeTest) {
-  doBleSettingChangeTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleSettingChangeTestForeground) {
-  doBleSettingChangeTest(this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
 }
 
 /**
  * Test that a nanoapp receives a function disabled error if it attempts to
  * start a scan when the BLE setting is disabled.
  */
-void doBleSettingDisabledStartScanTest(TestBase *test,
-                                       int8_t requestedThreadPriority) {
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<BleTestNanoapp>(info));
+TEST_F(BleTest, BleSettingDisabledStartScanTest) {
+  uint64_t appId = loadNanoapp(MakeUnique<BleTestNanoapp>());
 
   EventLoopManagerSingleton::get()->getSettingManager().postSettingChange(
       Setting::BLE_AVAILABLE, /* enable= */ false);
 
   bool enabled;
-  test->waitForEvent(CHRE_EVENT_SETTING_CHANGED_BLE_AVAILABLE, &enabled);
+  waitForEvent(CHRE_EVENT_SETTING_CHANGED_BLE_AVAILABLE, &enabled);
   EXPECT_FALSE(enabled);
 
   bool success;
   sendEventToNanoapp(appId, START_SCAN);
-  test->waitForEvent(START_SCAN, &success);
+  waitForEvent(START_SCAN, &success);
   EXPECT_TRUE(success);
   chreAsyncResult result{};
-  test->waitForEvent(CHRE_EVENT_BLE_ASYNC_RESULT, &result);
+  waitForEvent(CHRE_EVENT_BLE_ASYNC_RESULT, &result);
   EXPECT_EQ(result.errorCode, CHRE_ERROR_FUNCTION_DISABLED);
-}
-
-TEST_F(BleTest, BleSettingDisabledStartScanTest) {
-  doBleSettingDisabledStartScanTest(this,
-                                    NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleSettingDisabledStartScanTest) {
-  doBleSettingDisabledStartScanTest(this,
-                                    NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleSettingDisabledStartScanTestForeground) {
-  doBleSettingDisabledStartScanTest(
-      this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
 }
 
 /**
  * Test that a nanoapp receives a success response when it attempts to stop a
  * BLE scan while the BLE setting is disabled.
  */
-void doBleSettingDisabledStopScanTest(TestBase *test,
-                                      int8_t requestedThreadPriority) {
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<BleTestNanoapp>(info));
+TEST_F(BleTest, BleSettingDisabledStopScanTest) {
+  uint64_t appId = loadNanoapp(MakeUnique<BleTestNanoapp>());
 
   EventLoopManagerSingleton::get()->getSettingManager().postSettingChange(
       Setting::BLE_AVAILABLE, /* enable= */ false);
 
   bool enabled;
-  test->waitForEvent(CHRE_EVENT_SETTING_CHANGED_BLE_AVAILABLE, &enabled);
+  waitForEvent(CHRE_EVENT_SETTING_CHANGED_BLE_AVAILABLE, &enabled);
   EXPECT_FALSE(enabled);
 
-  assertStopScanSuccess(test, appId);
-}
-
-TEST_F(BleTest, BleSettingDisabledStopScanTest) {
-  doBleSettingDisabledStopScanTest(this,
-                                   NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleSettingDisabledStopScanTest) {
-  doBleSettingDisabledStopScanTest(this,
-                                   NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleSettingDisabledStopScanTestForeground) {
-  doBleSettingDisabledStopScanTest(
-      this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
+  assertStopScanSuccess(appId);
 }
 
 /**
  * Test that a nanoapp can read RSSI successfully.
  */
-void doBleReadRssi(TestBase *test, int8_t requestedThreadPriority) {
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<BleTestNanoapp>(info));
+TEST_F(BleTest, BleReadRssi) {
+  uint64_t appId = loadNanoapp(MakeUnique<BleTestNanoapp>());
 
   EventLoopManagerSingleton::get()->getSettingManager().postSettingChange(
       Setting::BLE_AVAILABLE, true /* enabled */);
   bool enabled;
-  test->waitForEvent(CHRE_EVENT_SETTING_CHANGED_BLE_AVAILABLE, &enabled);
+  waitForEvent(CHRE_EVENT_SETTING_CHANGED_BLE_AVAILABLE, &enabled);
   ASSERT_TRUE(enabled);
 
   bool success;
   sendEventToNanoapp(appId, RSSI_REQUEST);
-  test->waitForEvent(RSSI_REQUEST_SENT, &success);
+  waitForEvent(RSSI_REQUEST_SENT, &success);
   ASSERT_TRUE(success);
   chreBleReadRssiEvent event;
-  test->waitForEvent(CHRE_EVENT_BLE_RSSI_READ, &event);
+  waitForEvent(CHRE_EVENT_BLE_RSSI_READ, &event);
   ASSERT_EQ(event.result.errorCode, CHRE_ERROR_NONE);
-}
-
-TEST_F(BleTest, BleReadRssi) {
-  doBleReadRssi(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleReadRssi) {
-  doBleReadRssi(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleReadRssiForeground) {
-  doBleReadRssi(this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
 }
 
 /**
@@ -540,16 +393,12 @@ TEST_F(BleTestMultiThread, BleReadRssiForeground) {
  * receiving an async response. It should invalidate its original request by
  * calling start scan a second time.
  */
-void doBleStartScanTwiceBeforeAsyncResponseTest(
-    TestBase *test, int8_t requestedThreadPriority) {
+TEST_F(BleTest, BleStartScanTwiceBeforeAsyncResponseTest) {
   struct testData {
     void *cookie;
   };
 
   class App : public BleTestNanoapp {
-   public:
-    explicit App(TestNanoappInfo info = {}) : BleTestNanoapp(info) {}
-
     void handleEvent(uint32_t, uint16_t eventType, const void *eventData) {
       switch (eventType) {
         case CHRE_EVENT_BLE_ASYNC_RESULT: {
@@ -584,9 +433,7 @@ void doBleStartScanTwiceBeforeAsyncResponseTest(
     }
   };
 
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<App>(info));
+  uint64_t appId = loadNanoapp(MakeUnique<App>());
   bool success;
 
   delayBleScanStart(true /* delay */);
@@ -595,17 +442,17 @@ void doBleStartScanTwiceBeforeAsyncResponseTest(
   uint32_t cookieOne = 1;
   data.cookie = &cookieOne;
   sendEventToNanoapp(appId, START_SCAN, data);
-  test->waitForEvent(START_SCAN, &success);
+  waitForEvent(START_SCAN, &success);
   EXPECT_TRUE(success);
 
   uint32_t cookieTwo = 2;
   data.cookie = &cookieTwo;
   sendEventToNanoapp(appId, START_SCAN, data);
-  test->waitForEvent(START_SCAN, &success);
+  waitForEvent(START_SCAN, &success);
   EXPECT_TRUE(success);
 
   chreAsyncResult result;
-  test->waitForEvent(SCAN_STARTED, &result);
+  waitForEvent(SCAN_STARTED, &result);
   EXPECT_EQ(result.errorCode, CHRE_ERROR_OBSOLETE_REQUEST);
   EXPECT_EQ(result.cookie, &cookieOne);
 
@@ -614,29 +461,14 @@ void doBleStartScanTwiceBeforeAsyncResponseTest(
   delayBleScanStart(false /* delay */);
   EXPECT_TRUE(startBleScan());
 
-  test->waitForEvent(SCAN_STARTED, &result);
+  waitForEvent(SCAN_STARTED, &result);
   EXPECT_EQ(result.errorCode, CHRE_ERROR_NONE);
   EXPECT_EQ(result.cookie, &cookieTwo);
 
   sendEventToNanoapp(appId, STOP_SCAN, data);
-  test->waitForEvent(STOP_SCAN, &success);
+  waitForEvent(STOP_SCAN, &success);
   EXPECT_TRUE(success);
-  test->waitForEvent(SCAN_STOPPED);
-}
-
-TEST_F(BleTest, BleStartScanTwiceBeforeAsyncResponseTest) {
-  doBleStartScanTwiceBeforeAsyncResponseTest(
-      this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleStartScanTwiceBeforeAsyncResponseTest) {
-  doBleStartScanTwiceBeforeAsyncResponseTest(
-      this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleStartScanTwiceBeforeAsyncResponseTestForeground) {
-  doBleStartScanTwiceBeforeAsyncResponseTest(
-      this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
+  waitForEvent(SCAN_STOPPED);
 }
 
 /**
@@ -644,12 +476,10 @@ TEST_F(BleTestMultiThread, BleStartScanTwiceBeforeAsyncResponseTestForeground) {
  * is enabled for the nanoapp. This test validates that batching will hold the
  * data and flush will send the batched data and then a flush complete event.
  */
-void doBleFlush(TestBase *test, int8_t requestedThreadPriority) {
+TEST_F(BleTest, BleFlush) {
   CREATE_CHRE_TEST_EVENT(SAW_BLE_AD_AND_FLUSH_COMPLETE, 8);
   class App : public BleTestNanoapp {
    public:
-    explicit App(TestNanoappInfo info = {}) : BleTestNanoapp(info) {}
-
     void handleEvent(uint32_t, uint16_t eventType,
                      const void *eventData) override {
       switch (eventType) {
@@ -711,25 +541,24 @@ void doBleFlush(TestBase *test, int8_t requestedThreadPriority) {
     }
 
    private:
+    uint32_t mCookie;
     bool mSawBleAdvertisementEvent = false;
     bool mSawFlushCompleteEvent = false;
   };
 
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<App>(info));
+  uint64_t appId = loadNanoapp(MakeUnique<App>());
 
   // Flushing before a scan should fail.
   bool success;
   sendEventToNanoapp(appId, CALL_FLUSH);
-  test->waitForEvent(CALL_FLUSH, &success);
+  waitForEvent(CALL_FLUSH, &success);
   ASSERT_FALSE(success);
 
   // Start a scan with batching.
   sendEventToNanoapp(appId, START_SCAN);
-  test->waitForEvent(START_SCAN, &success);
+  waitForEvent(START_SCAN, &success);
   ASSERT_TRUE(success);
-  test->waitForEvent(SCAN_STARTED);
+  waitForEvent(SCAN_STARTED);
   ASSERT_TRUE(chrePalIsBleEnabled());
 
   // Call flush again multiple times and get the complete event.
@@ -740,7 +569,7 @@ void doBleFlush(TestBase *test, int8_t requestedThreadPriority) {
     std::this_thread::sleep_for(std::chrono::milliseconds(250));
 
     sendEventToNanoapp(appId, CALL_FLUSH);
-    test->waitForEvent(CALL_FLUSH, &success);
+    waitForEvent(CALL_FLUSH, &success);
     ASSERT_TRUE(success);
 
     // Wait for some data and a flush complete.
@@ -754,193 +583,113 @@ void doBleFlush(TestBase *test, int8_t requestedThreadPriority) {
     // batch timer, which is valid (call flush, get
     // any advertisement events, flush complete event
     // might get some advertisement events afterwards).
-    test->waitForEvent(SAW_BLE_AD_AND_FLUSH_COMPLETE);
+    waitForEvent(SAW_BLE_AD_AND_FLUSH_COMPLETE);
   }
 
   // Stop a scan.
   sendEventToNanoapp(appId, STOP_SCAN);
-  test->waitForEvent(STOP_SCAN, &success);
+  waitForEvent(STOP_SCAN, &success);
   ASSERT_TRUE(success);
-  test->waitForEvent(SCAN_STOPPED);
+  waitForEvent(SCAN_STOPPED);
   ASSERT_FALSE(chrePalIsBleEnabled());
 
   // Flushing after a scan should fail.
   sendEventToNanoapp(appId, CALL_FLUSH);
-  test->waitForEvent(CALL_FLUSH, &success);
+  waitForEvent(CALL_FLUSH, &success);
   ASSERT_FALSE(success);
 }
 
-TEST_F(BleTest, BleFlush) {
-  doBleFlush(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleFlush) {
-  doBleFlush(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleFlushForeground) {
-  doBleFlush(this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
-}
-
-void doBleBatchCompleteViaDelayMs(TestBase *test,
-                                  int8_t requestedThreadPriority) {
+TEST_F(BleTest, BleBatchCompleteViaDelayMs) {
   uint32_t kReportDelayMs = 200;
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<BleTestNanoapp>(info));
+  uint64_t appId = loadNanoapp(MakeUnique<BleTestNanoapp>());
 
   // Start a scan with batching.
-  assertStartScanSuccess(test, appId, kReportDelayMs);
-  test->waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE);
+  assertStartScanSuccess(appId, kReportDelayMs);
+  waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE);
 
   // Batch complete must be called while flush is being called.
   chreBatchCompleteEvent batchCompleteEvent{};
-  test->waitForEvent(CHRE_EVENT_BLE_BATCH_COMPLETE, &batchCompleteEvent);
+  waitForEvent(CHRE_EVENT_BLE_BATCH_COMPLETE, &batchCompleteEvent);
   ASSERT_EQ(batchCompleteEvent.eventType, CHRE_EVENT_BLE_ADVERTISEMENT);
 
   // Stop a scan.
-  assertStopScanSuccess(test, appId);
+  assertStopScanSuccess(appId);
 }
 
-TEST_F(BleTest, BleBatchCompleteViaDelayMs) {
-  doBleBatchCompleteViaDelayMs(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleBatchCompleteViaDelayMs) {
-  doBleBatchCompleteViaDelayMs(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleBatchCompleteViaDelayMsForeground) {
-  doBleBatchCompleteViaDelayMs(this,
-                               NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
-}
-
-void doBleScanStatusChange(TestBase *test, int8_t requestedThreadPriority) {
+TEST_F(BleTest, BleScanStatusChange) {
   constexpr uint32_t kReportDelayMs = 123;
 
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<BleTestNanoapp>(info));
+  uint64_t appId = loadNanoapp(MakeUnique<BleTestNanoapp>());
 
   // Initial status check. Note that the first status change event is sent
   // before the nanoapp is loaded, so we check with getScanStatus.
   chreBleScanStatus status;
   sendEventToNanoapp(appId, GET_SCAN_STATUS);
-  test->waitForEvent(GET_SCAN_STATUS, &status);
+  waitForEvent(GET_SCAN_STATUS, &status);
   EXPECT_FALSE(status.enabled);
 
   // Start scan and check for status change
-  assertStartScanSuccess(test, appId, kReportDelayMs);
-  test->waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
+  assertStartScanSuccess(appId, kReportDelayMs);
+  waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
   EXPECT_TRUE(status.enabled);
   EXPECT_EQ(status.reportDelayMs, kReportDelayMs);
 
   // Stop scan and check for status change
-  assertStopScanSuccess(test, appId);
-  test->waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
+  assertStopScanSuccess(appId);
+  waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
   EXPECT_FALSE(status.enabled);
 
-  test->unloadNanoapp(appId);
+  unloadNanoapp(appId);
 }
 
-TEST_F(BleTest, BleScanStatusChange) {
-  doBleScanStatusChange(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleScanStatusChange) {
-  doBleScanStatusChange(this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleScanStatusChangeForeground) {
-  doBleScanStatusChange(this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
-}
-
-void doBleScanStatusChangeWithSettingToggle(TestBase *test,
-                                            int8_t requestedThreadPriority) {
+TEST_F(BleTest, BleScanStatusChangeWithSettingToggle) {
   constexpr uint32_t kReportDelayMs = 456;
 
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<BleTestNanoapp>(info));
+  uint64_t appId = loadNanoapp(MakeUnique<BleTestNanoapp>());
 
-  assertStartScanSuccess(test, appId, kReportDelayMs);
+  assertStartScanSuccess(appId, kReportDelayMs);
 
   chreBleScanStatus status;
-  test->waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
+  waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
   EXPECT_TRUE(status.enabled);
   EXPECT_EQ(status.reportDelayMs, kReportDelayMs);
 
   // Disable BLE setting
   EventLoopManagerSingleton::get()->getSettingManager().postSettingChange(
       Setting::BLE_AVAILABLE, false /* enabled */);
-  test->waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
+  waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
   EXPECT_FALSE(status.enabled);
 
   // Enable BLE setting
   EventLoopManagerSingleton::get()->getSettingManager().postSettingChange(
       Setting::BLE_AVAILABLE, true /* enabled */);
-  test->waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
+  waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
   EXPECT_TRUE(status.enabled);
   EXPECT_EQ(status.reportDelayMs, kReportDelayMs);
 
-  assertStopScanSuccess(test, appId);
-  test->unloadNanoapp(appId);
+  unloadNanoapp(appId);
 }
 
-TEST_F(BleTest, BleScanStatusChangeWithSettingToggle) {
-  doBleScanStatusChangeWithSettingToggle(
-      this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleScanStatusChangeWithSettingToggle) {
-  doBleScanStatusChangeWithSettingToggle(
-      this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleScanStatusChangeWithSettingToggleForeground) {
-  doBleScanStatusChangeWithSettingToggle(
-      this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
-}
-
-void doBleScanStatusChangeWithDelayMsUpdate(TestBase *test,
-                                            int8_t requestedThreadPriority) {
+TEST_F(BleTest, BleScanStatusChangeWithDelayMsUpdate) {
   constexpr uint32_t kBaseReportDelayMs = 200;
   constexpr uint32_t kFasterScanReportDelayMs = kBaseReportDelayMs - 100;
-  TestNanoappInfo info;
-  info.requestedThreadPriority = requestedThreadPriority;
-  uint64_t appId = test->loadNanoapp(MakeUnique<BleTestNanoapp>(info));
+  uint64_t appId = loadNanoapp(MakeUnique<BleTestNanoapp>());
 
-  assertStartScanSuccess(test, appId, kBaseReportDelayMs);
+  assertStartScanSuccess(appId, kBaseReportDelayMs);
 
   chreBleScanStatus status;
-  test->waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
+  waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
   EXPECT_TRUE(status.enabled);
   EXPECT_EQ(status.reportDelayMs, kBaseReportDelayMs);
 
   // request a more frequent scan
-  assertStartScanSuccess(test, appId, kFasterScanReportDelayMs);
+  assertStartScanSuccess(appId, kFasterScanReportDelayMs);
 
-  test->waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
+  waitForEvent(CHRE_EVENT_BLE_SCAN_STATUS_CHANGE, &status);
   EXPECT_TRUE(status.enabled);
   EXPECT_EQ(status.reportDelayMs, kFasterScanReportDelayMs);
 
-  assertStopScanSuccess(test, appId);
-  test->unloadNanoapp(appId);
-}
-
-TEST_F(BleTest, BleScanStatusChangeWithDelayMsUpdate) {
-  doBleScanStatusChangeWithDelayMsUpdate(
-      this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleScanStatusChangeWithDelayMsUpdate) {
-  doBleScanStatusChangeWithDelayMsUpdate(
-      this, NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
-}
-
-TEST_F(BleTestMultiThread, BleScanStatusChangeWithDelayMsUpdateForeground) {
-  doBleScanStatusChangeWithDelayMsUpdate(
-      this, NANOAPP_REQUESTED_THREAD_PRIORITY_FOREGROUND);
+  unloadNanoapp(appId);
 }
 
 }  // namespace
