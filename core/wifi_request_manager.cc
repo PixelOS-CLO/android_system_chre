@@ -26,6 +26,7 @@
 #include "chre/core/event_loop_manager.h"
 #include "chre/core/settings.h"
 #include "chre/core/system_health_monitor.h"
+#include "chre/platform/context.h"
 #include "chre/platform/fatal_error.h"
 #include "chre/platform/log.h"
 #include "chre/platform/system_time.h"
@@ -927,10 +928,12 @@ bool WifiRequestManager::nanoappHasPendingScanMonitorRequest(
 
 bool WifiRequestManager::updateNanoappScanMonitoringList(bool enable,
                                                          uint16_t instanceId) {
+  EventLoop *eventLoop =
+      EventLoopManagerSingleton::get()->getEventLoopByInstanceId(instanceId);
+  CHRE_ASSERT(eventLoop != nullptr);
+
   bool success = true;
-  Nanoapp *nanoapp =
-      EventLoopManagerSingleton::get()->getEventLoop().findNanoappByInstanceId(
-          instanceId);
+  Nanoapp *nanoapp = eventLoop->findNanoappByInstanceId(instanceId);
   size_t nanoappIndex;
   bool hasExistingRequest =
       nanoappHasScanMonitorRequest(instanceId, &nanoappIndex);
