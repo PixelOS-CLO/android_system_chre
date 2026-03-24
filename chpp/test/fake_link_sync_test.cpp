@@ -467,6 +467,19 @@ TEST_F(FakeLinkSyncTests, ResendAckOnDupe) {
       << "Expected ACK for seq 2 but got: " << asEmptyPacket(pkt);
 }
 
+TEST_F(FakeLinkSyncTests, TriggerResetOnRepeatedResetAcks) {
+  for (int i = 0; i <= CHPP_TRANSPORT_MAX_UNEXPECTED_RESET_ACK; i++) {
+    deliverRxPacket(generateResetAckPacket());
+  }
+
+  ASSERT_TRUE(mFakeLink->waitForTxPacket());
+  std::vector<uint8_t> resetPkt = mFakeLink->popTxPacket();
+  ChppResetPacket expected =
+      generateResetPacket(1, 0, CHPP_TRANSPORT_ERROR_MAX_RETRIES);
+  EXPECT_TRUE(comparePacket(resetPkt, expected))
+      << "Full packet: " << asResetPacket(resetPkt);
+}
+
 TEST_F(FakeLinkWithClientSyncTests, RecoverFromAbortedOpen) {
   // Setting all callbacks as null here since none should be invoked
   const struct chrePalWifiCallbacks kCallbacks = {};
