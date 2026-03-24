@@ -25,13 +25,55 @@ definitions. Finally, it writes a `CMakeLists.txt` file that can be used by IDEs
 such as CLion or by CMake to generate  `compile_commands.json` for code
 completion
 and analysis.
+
+The build command must include the dry-run option (`-n`) and must not specify
+parallel execution greater than 1 (e.g., `-j2`, `-j4`).
 """
+
 import argparse
 import os
 import re
 import shlex
 import subprocess
 from shell_util import fatal_error, init_file
+
+
+def _validate_build_command(command: str):
+  """Validates that the build command is safe for parsing.
+
+  Args:
+    command: The build command string.
+  """
+  tokens = shlex.split(command)
+
+  # Check for dry-run option
+  if '-n' not in tokens:
+    fatal_error("The build command must include the '-n' (dry-run) option.")
+
+  # Check for parallel execution
+  for token in tokens:
+    if token.startswith('-j'):
+      if token == '-j':
+        # If -j is separate, the next token might be the number
+        try:
+          idx = tokens.index(token)
+          if idx + 1 < len(tokens):
+            jobs = int(tokens[idx + 1])
+            if jobs > 1:
+              fatal_error('Parallel execution (-j > 1) is not supported.')
+          else:
+            fatal_error('Parallel execution (unlimited jobs) is not supported.')
+        except ValueError:
+          # -j without number means unlimited
+          fatal_error('Parallel execution (unlimited jobs) is not supported.')
+      else:
+        # -jX case
+        try:
+          jobs = int(token[2:])
+          if jobs > 1:
+            fatal_error(f'Parallel execution ({token}) is not supported.')
+        except ValueError:
+          pass  # Not a number, assuming something else starts with -j
 
 
 def _write_header(output, project_name):
@@ -129,7 +171,7 @@ def _write_macros(output, macros):
 def _clean_term(term):
   """Cleans a single term from the compiler command line for parsing.
 
-  Removes backslashes, single quotes, and escapes parentheses.
+  Escapes parentheses.
 
   Args:
     term: A string representing a single argument from the command line.
@@ -137,8 +179,6 @@ def _clean_term(term):
   Returns:
     The cleaned term.
   """
-  term = re.sub(r'\\', '', term)
-  term = re.sub(r"'", '', term)
   term = re.sub(r'\(', '\\(', term)
   term = re.sub(r'\)', '\\)', term)
   return term
@@ -154,9 +194,88 @@ def _convert_to_abs_path(path: str, cwd: str) -> str:
   Returns:
     The absolute path.
   """
-  return (
-      path if os.path.isabs(path) else os.path.abspath(os.path.join(cwd, path))
+  if not os.path.isabs(path):
+    path = os.path.join(cwd, path)
+  return os.path.realpath(path)
+
+
+def _update_dir_stack(line: str, dir_stack: list[str]) -> str:
+  """Updates the directory stack based on the build output line.
+
+  Tracks directory changes via 'make: Entering directory' and
+  'make: Leaving directory'.
+
+  Args:
+    line: A line from the build command's output.
+    dir_stack: The directory stack.
+
+  Returns:
+    The current working directory.
+  """
+  current_cwd = dir_stack[-1] if dir_stack else os.getcwd()
+
+  # Track current working directory changes via 'make: Entering directory'
+  # which is standard when make runs with -w/--print-directory.
+  entering_dir_match = re.search(
+      r"make(?:\[\d+])?: Entering directory ['\"](.+)['\"]", line
   )
+  if entering_dir_match:
+    new_dir = _convert_to_abs_path(entering_dir_match.group(1), current_cwd)
+    dir_stack.append(new_dir)
+    print(f'Entering directory: {new_dir}', flush=True)
+    return new_dir
+
+  # Track leaving directory
+  leaving_dir_match = re.search(
+      r"make(?:\[\d+])?: Leaving directory ['\"](.+)['\"]", line
+  )
+  if leaving_dir_match:
+    if len(dir_stack) > 1:
+      left_dir = dir_stack.pop()
+      print(f'Leaving directory: {left_dir}', flush=True)
+    return dir_stack[-1] if dir_stack else os.getcwd()
+
+  try:
+    tokens = shlex.split(line)
+  except ValueError:
+    return current_cwd
+
+  # Track current working directory changes via 'make -C', 'env -C', etc.
+  # Note: GNU make allows -C dir, -Cdir, --directory=dir, --directory dir.
+  # Multiple -C options are cumulative.
+  is_wrapper = any(
+      t == 'make'
+      or t == 'gmake'
+      or t == 'env'
+      or t.endswith('/make')
+      or t.endswith('/gmake')
+      or t.endswith('/env')
+      for t in tokens
+  )
+
+  updated_cwd = current_cwd
+  if is_wrapper:
+    i = 0
+    while i < len(tokens):
+      token = tokens[i]
+      if token == '-C' or token == '--directory':
+        if i + 1 < len(tokens):
+          updated_cwd = _convert_to_abs_path(tokens[i + 1], updated_cwd)
+          print(f'Updated current_cwd to: {updated_cwd}', flush=True)
+          i += 1
+      elif token.startswith('-C'):
+        updated_cwd = _convert_to_abs_path(token[2:], updated_cwd)
+        print(f'Updated current_cwd to: {updated_cwd}', flush=True)
+      elif token.startswith('--directory='):
+        updated_cwd = _convert_to_abs_path(
+            token[len('--directory=') :], updated_cwd
+        )
+        print(f'Updated current_cwd to: {updated_cwd}', flush=True)
+      i += 1
+
+  if updated_cwd != current_cwd:
+    dir_stack.append(updated_cwd)
+  return dir_stack[-1] if dir_stack else os.getcwd()
 
 
 def _parse_compilation_output(args: argparse.Namespace, result: list[str]):
@@ -176,22 +295,62 @@ def _parse_compilation_output(args: argparse.Namespace, result: list[str]):
   macros = dict()
   flags = dict()
   output_file = os.path.join(args.output_path, 'CMakeLists.txt')
+  dir_stack = [args.src_path]
 
   init_file(output_file)
   with open(output_file, 'w') as output:
     _write_header(output, args.project_name)
-
     for line in result:
+      current_cwd = _update_dir_stack(line, dir_stack)
+
       # Only parse lines that appear to be compilation commands for a source file.
       if ' -c ' not in line or ' -o ' not in line:
         continue
 
-      tokens = shlex.split(line)
+      try:
+        tokens = shlex.split(line)
+      except ValueError:
+        continue
+
       src_file_path = None
-      for token in tokens:
-        if re.search(r'\.(c|cc|cpp)$', token):
+      i = 0
+      while i < len(tokens):
+        token = tokens[i]
+
+        # Source file
+        if not token.startswith('-') and re.search(r'\.(c|cc|cpp)$', token):
           src_file_path = token
-          break  # Found it, stop searching
+
+        # include paths
+        elif token == '-I' or token == '-isystem':
+          if i + 1 < len(tokens):
+            inc_paths.add(
+                '"{}"'.format(_convert_to_abs_path(tokens[i + 1], current_cwd))
+            )
+            i += 1
+        elif token.startswith('-I'):
+          inc_paths.add(
+              '"{}"'.format(_convert_to_abs_path(token[2:], current_cwd))
+          )
+        elif token.startswith('-isystem'):
+          inc_paths.add(
+              '"{}"'.format(_convert_to_abs_path(token[8:], current_cwd))
+          )
+
+        # macros and flags
+        elif token.startswith('-D') or token.startswith('-W'):
+          cleaned_token = _clean_term(token)
+          idx = cleaned_token.find('=')
+          key, val = (
+              (cleaned_token[:idx], cleaned_token[idx:])
+              if idx > 0
+              else (cleaned_token, '')
+          )
+          if cleaned_token.startswith('-D'):
+            macros[key[2:]] = val
+          elif cleaned_token.startswith('-W'):
+            flags[key] = val
+        i += 1
 
       if not src_file_path:
         continue
@@ -199,33 +358,7 @@ def _parse_compilation_output(args: argparse.Namespace, result: list[str]):
         print('Found src file: ' + src_file_path, flush=True)
 
       # Add source files
-      src_files.append(_convert_to_abs_path(src_file_path, args.src_path))
-
-      # treat system include paths as general include paths
-      line = re.sub(r' -isystem ', ' -I', line)
-
-      # Add header files and macros
-      # Treat backslash-prefixed space as space literal in a term
-      for term in re.split(r'(?<!\\) ', line):
-        term = _clean_term(term)
-        if not term.startswith('-'):
-          continue
-
-        # include paths
-        if term.startswith('-I'):
-          inc_paths.add(
-              '"{}"'.format(_convert_to_abs_path(term[2:], args.src_path))
-          )
-          continue
-
-        # macros and flags
-        idx = term.find('=')
-        key, val = (term[:idx], term[idx:]) if idx > 0 else (term, '')
-        if term.startswith('-D'):
-          macros[key[2:]] = val
-        elif term.startswith('-W'):
-          flags[key] = val
-
+      src_files.append(_convert_to_abs_path(src_file_path, current_cwd))
     header_files = _find_header_files(args.src_path)
     print(f'{len(header_files)} header files')
     _write_src_files(output, sorted(header_files))
@@ -242,7 +375,8 @@ def _parse_compilation_output(args: argparse.Namespace, result: list[str]):
     print(f'{len(flags)} flags')
 
     output.write(
-        f'add_executable({os.environ.get("CHRE_PLATFORM")}_{os.environ.get("CHRE_TARGET_TYPE")} ${{SOURCE_FILES}})\n'
+        f'add_executable({os.environ.get("CHRE_PLATFORM")}_{os.environ.get("CHRE_TARGET_TYPE")}'
+        ' ${SOURCE_FILES})\n'
     )
 
 
@@ -288,6 +422,8 @@ def main():
   args = arg_parser.parse_args()
   args.output_path = os.path.expanduser(args.output_path)
   args.src_path = os.path.expanduser(args.src_path)
+
+  _validate_build_command(args.command)
 
   print(args)
   print('command: ' + args.command)

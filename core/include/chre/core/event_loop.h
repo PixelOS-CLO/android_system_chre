@@ -403,8 +403,9 @@ class EventLoop : public NonCopyable {
    * This function is safe to call from any thread.
    *
    * @param function The function to execute for each nanoapp.
+   * @return true if the iteration was stopped because a match was found.
    */
-  void onMatchingNanoappEndpoint(
+  bool onMatchingNanoappEndpoint(
       const pw::Function<bool(const message::EndpointInfo &)> &function);
 
   /**
@@ -414,8 +415,9 @@ class EventLoop : public NonCopyable {
    * This function is safe to call from any thread.
    *
    * @param function The function to execute for each service.
+   * @return true if the iteration was stopped because a match was found.
    */
-  void onMatchingNanoappService(
+  bool onMatchingNanoappService(
       const pw::Function<bool(const message::EndpointInfo &,
                               const message::ServiceInfo &)> &function);
 
@@ -434,9 +436,7 @@ class EventLoop : public NonCopyable {
    * Returns a reference to the power control manager. This allows power
    * controls from subsystems outside the event loops.
    */
-  PowerControlManager &getPowerControlManager() {
-    return mPowerControlManager;
-  }
+  PowerControlManager &getPowerControlManager();
 
   inline uint32_t getMaxEventQueueSize() const {
     return mEventQueueUsage.getMax();
@@ -523,9 +523,6 @@ class EventLoop : public NonCopyable {
 
   //! Set to the nanoapp we are in the process of unloading in unloadNanoapp()
   Nanoapp *mStoppingNanoapp = nullptr;
-
-  //! The object which manages power related controls.
-  PowerControlManager mPowerControlManager;
 
   //! The stats collection used to collect event queue usage
   StatsContainer<uint32_t> mEventQueueUsage;

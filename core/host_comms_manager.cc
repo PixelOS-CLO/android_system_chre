@@ -73,17 +73,14 @@ bool shouldAcceptMessageToHostFromNanoapp(Nanoapp *nanoapp, void *messageData,
 
 }  // namespace
 
-HostCommsManager::HostCommsManager(EventLoop *eventLoop)
+HostCommsManager::HostCommsManager()
 #ifdef CHRE_RELIABLE_MESSAGE_SUPPORT_ENABLED
     : mDuplicateMessageDetector(kReliableMessageDuplicateDetectorTimeout),
-      mTransactionManager(*this,
-                          EventLoopManagerSingleton::get()->getTimerPool(),
-                          kReliableMessageRetryWaitTime, eventLoop,
-                          kReliableMessageMaxAttempts) {
-#else
-{
-  UNUSED_VAR(eventLoop);
+      mTransactionManager(
+          *this, EventLoopManagerSingleton::get()->getTimerPool(),
+          kReliableMessageRetryWaitTime, kReliableMessageMaxAttempts)
 #endif  // CHRE_RELIABLE_MESSAGE_SUPPORT_ENABLED
+{
 }
 
 // TODO(b/346345637): rename this to align it with the message delivery status
@@ -100,10 +97,24 @@ bool HostCommsManager::completeTransaction(
                             ->getHostCommsManager()
                             .handleMessageDeliveryStatusSync(txnId, err);
                       };
+  uint32_t messageSequenceNumber = transactionId;
+  MessageToHost *message = findMessageToHostBySeq(messageSequenceNumber);
+  if (message == nullptr) {
+    LOGE("Message not found for transaction ID %" PRIu32, transactionId);
+    return false;
+  }
+  EventLoop *eventLoop =
+      EventLoopManagerSingleton::get()->getEventLoopByAppId(message->appId);
+  if (eventLoop == nullptr) {
+    LOGE("Couldn't complete transaction %" PRIu32
+         ": event loop not found for app ID 0x%016" PRIx64,
+         messageSequenceNumber, message->appId);
+    return false;
+  }
   EventLoopManagerSingleton::get()->deferCallback(
       SystemCallbackType::ReliableMessageEvent,
       NestedDataPtr<uint32_t>(transactionId), callback,
-      NestedDataPtr<uint8_t>(errorCode));
+      NestedDataPtr<uint8_t>(errorCode), eventLoop);
   return true;
 #else
   return false;
@@ -166,6 +177,8 @@ void HostCommsManager::flushNanoappMessages(Nanoapp &nanoapp) {
   // nanoapp) anymore, i.e. onMessageToHostComplete() is called, which lets us
   // free memory for any pending reliable messages
   HostLink::flushMessagesSentByNanoapp(nanoapp.getAppId());
+
+  GlobalApiLockGuard lock;
   freeAllReliableMessagesFromNanoapp(nanoapp);
 }
 
@@ -175,6 +188,7 @@ void HostCommsManager::onMessageToHostComplete(const MessageToHost *message) {
   // We do not call onMessageToHostCompleteInternal for reliable messages
   // until the completion callback is called.
   if (message != nullptr && !message->isReliable) {
+    GlobalApiLockGuard lock;
     onMessageToHostCompleteInternal(message);
   }
 }
@@ -219,6 +233,7 @@ bool HostCommsManager::sendMessageToHostFromNanoapp(
       LockGuard<Mutex> lock(mTransactionManagerMutex);
 #endif  // CHRE_MULTI_THREADING_ENABLED
       success = mTransactionManager.add(nanoapp->getInstanceId(),
+                                        getCurrentEventLoop(),
                                         &msgToHost->messageSequenceNumber);
     }
 #endif  // CHRE_RELIABLE_MESSAGE_SUPPORT_ENABLED
@@ -252,10 +267,15 @@ void HostCommsManager::sendMessageToNanoappFromHost(
                               ->getHostCommsManager()
                               .deliverNanoappMessageFromHost(craftedMessage);
                         };
-
-    if (!EventLoopManagerSingleton::get()->deferCallback(
-            SystemCallbackType::DeferredMessageToNanoappFromHost,
-            craftedMessage, callback)) {
+    EventLoop *eventLoop =
+        EventLoopManagerSingleton::get()->getEventLoopByAppId(appId);
+    if (eventLoop == nullptr) {
+      LOGE("App ID 0x%016" PRIx64 " not found on any event loop", appId);
+      error = CHRE_ERROR_DESTINATION_NOT_FOUND;
+    } else if (!EventLoopManagerSingleton::get()->deferCallback(
+                   SystemCallbackType::DeferredMessageToNanoappFromHost,
+                   craftedMessage, callback, /* extraData= */ nullptr,
+                   eventLoop)) {
       LOGE("Failed to defer callback to send message to nanoapp from host");
       error = CHRE_ERROR_BUSY;
     }
@@ -350,10 +370,10 @@ void HostCommsManager::deliverNanoappMessageFromHost(
   Optional<chreError> error;
   uint16_t targetInstanceId;
 
-  bool foundNanoapp = EventLoopManagerSingleton::get()
-                          ->getEventLoop()
-                          .findNanoappInstanceIdByAppId(craftedMessage->appId,
-                                                        &targetInstanceId);
+  EventLoop *eventLoop = getCurrentEventLoop();
+  CHRE_ASSERT(eventLoop != nullptr);
+  bool foundNanoapp = eventLoop->findNanoappInstanceIdByAppId(
+      craftedMessage->appId, &targetInstanceId);
   bool shouldDeliverMessage = !craftedMessage->isReliable ||
                               shouldSendReliableMessageToNanoapp(
                                   craftedMessage->messageSequenceNumber,
@@ -361,9 +381,9 @@ void HostCommsManager::deliverNanoappMessageFromHost(
   if (!foundNanoapp) {
     error = CHRE_ERROR_DESTINATION_NOT_FOUND;
   } else if (shouldDeliverMessage) {
-    EventLoopManagerSingleton::get()->getEventLoop().distributeEventSync(
-        CHRE_EVENT_MESSAGE_FROM_HOST, &craftedMessage->fromHostData,
-        targetInstanceId);
+    eventLoop->distributeEventSync(CHRE_EVENT_MESSAGE_FROM_HOST,
+                                   &craftedMessage->fromHostData,
+                                   targetInstanceId);
     error = CHRE_ERROR_NONE;
   }
 
@@ -381,15 +401,18 @@ void HostCommsManager::deliverNanoappMessageFromHost(
 
 bool HostCommsManager::doSendMessageToHostFromNanoapp(
     Nanoapp *nanoapp, MessageToHost *msgToHost) {
-  bool hostWasAwake = EventLoopManagerSingleton::get()
-                          ->getEventLoop()
-                          .getPowerControlManager()
-                          .hostIsAwake();
+  bool hostWasAwake =
+      EventLoopManagerSingleton::get()->getPowerControlManager().hostIsAwake();
   bool wokeHost = !hostWasAwake && !mIsNanoappBlamedForWakeup;
   msgToHost->toHostData.wokeHost = wokeHost;
 
-  if (!HostLink::sendMessage(msgToHost)) {
-    return false;
+  {
+    // Temporarily unlock the global API mutex while calling into HostLink,
+    // because it may call back into HostCommsManager.
+    GlobalApiUnlockGuard lock;
+    if (!HostLink::sendMessage(msgToHost)) {
+      return false;
+    }
   }
 
   if (wokeHost) {
@@ -433,10 +456,10 @@ void HostCommsManager::freeMessageToHost(MessageToHost *msgToHost) {
 
 void HostCommsManager::onTransactionAttempt(uint32_t messageSequenceNumber,
                                             uint16_t nanoappInstanceId) {
+  EventLoop *eventLoop = getCurrentEventLoop();
+  CHRE_ASSERT(eventLoop != nullptr);
   MessageToHost *message = findMessageToHostBySeq(messageSequenceNumber);
-  Nanoapp *nanoapp =
-      EventLoopManagerSingleton::get()->getEventLoop().findNanoappByInstanceId(
-          nanoappInstanceId);
+  Nanoapp *nanoapp = eventLoop->findNanoappByInstanceId(nanoappInstanceId);
   if (message == nullptr || nanoapp == nullptr) {
     LOGE("Attempted to send reliable message %" PRIu32 " from nanoapp %" PRIu16
          " but couldn't find:%s%s",
@@ -477,14 +500,15 @@ void HostCommsManager::handleDuplicateAndSendMessageDeliveryStatus(
 void HostCommsManager::handleMessageDeliveryStatusSync(
     uint32_t messageSequenceNumber, uint8_t errorCode)
     CHRE_REQUIRES(getMultiThreadingApiMutex()) {
-  EventLoop &eventLoop = EventLoopManagerSingleton::get()->getEventLoop();
+  EventLoop *eventLoop = getCurrentEventLoop();
+  CHRE_ASSERT(eventLoop != nullptr);
   uint16_t nanoappInstanceId;
   MessageToHost *message = findMessageToHostBySeq(messageSequenceNumber);
   if (message == nullptr) {
     LOGW("Got message delivery status for unexpected seq %" PRIu32,
          messageSequenceNumber);
-  } else if (!eventLoop.findNanoappInstanceIdByAppId(message->appId,
-                                                     &nanoappInstanceId)) {
+  } else if (!eventLoop->findNanoappInstanceIdByAppId(message->appId,
+                                                      &nanoappInstanceId)) {
     // Expected if we unloaded the nanoapp while a message was in flight
     LOGW("Got message delivery status seq %" PRIu32
          " but couldn't find nanoapp 0x%" PRIx64,
@@ -496,8 +520,8 @@ void HostCommsManager::handleMessageDeliveryStatusSync(
     asyncResult.cookie = message->cookie;
 
     onMessageToHostCompleteInternal(message);
-    eventLoop.distributeEventSync(CHRE_EVENT_RELIABLE_MSG_ASYNC_RESULT,
-                                  &asyncResult, nanoappInstanceId);
+    eventLoop->distributeEventSync(CHRE_EVENT_RELIABLE_MSG_ASYNC_RESULT,
+                                   &asyncResult, nanoappInstanceId);
   }
 }
 
@@ -516,23 +540,28 @@ void HostCommsManager::onMessageToHostCompleteInternal(
   // EventLoop context.
   if (msgToHost->toHostData.nanoappFreeFunction == nullptr) {
     mMessagePool.deallocate(msgToHost);
+  } else if (EventLoopManagerSingleton::get()->inEventLoopForNanoapp(
+                 msgToHost->appId)) {
+    // If we're already within the event loop context, it is safe to call the
+    // free callback synchronously.
+    GlobalApiUnlockGuard lock;
+    freeMessageToHost(msgToHost);
   } else {
+    // TODO(b/488037034): Enable thread-safety analysis annotations here.
     auto freeMsgCallback =
-        [](uint16_t /*type*/, void *data,
-           void * /*extraData*/) CHRE_NO_THREAD_SAFETY_ANALYSIS {
-          // TODO(b/475537998): Optimize the global API mutex locking in this
-          // code path.
-          auto *lock = EventLoopManagerSingleton::get()->getGlobalApiMutex();
-          lock->unlock();
-          EventLoopManagerSingleton::get()
-              ->getHostCommsManager()
-              .freeMessageToHost(static_cast<MessageToHost *>(data));
-          lock->lock();
-        };
+        [](uint16_t /*type*/, void *data, void * /*extraData*/)
+            CHRE_NO_THREAD_SAFETY_ANALYSIS {
+              // TODO(b/475537998): Optimize the global API mutex locking in
+              // this code path.
+              GlobalApiUnlockGuard lock;
+              EventLoopManagerSingleton::get()
+                  ->getHostCommsManager()
+                  .freeMessageToHost(static_cast<MessageToHost *>(data));
+            };
 
     if (!EventLoopManagerSingleton::get()->deferCallback(
             SystemCallbackType::MessageToHostComplete, msgToHost,
-            freeMsgCallback,
+            freeMsgCallback, /* extraData= */ nullptr,
             EventLoopManagerSingleton::get()->getEventLoopByAppId(
                 msgToHost->appId))) {
       freeMessageToHost(static_cast<MessageToHost *>(msgToHost));

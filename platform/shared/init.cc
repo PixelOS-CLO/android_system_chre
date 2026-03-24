@@ -141,6 +141,9 @@ std::optional<HostMessageHubManager> gHostMessageHubManager;
 #endif  // CHRE_DATA_FLOW_MEMORY_REGION
 
 CHRE_DATA_FLOW_MEMORY_REGION
+std::optional<SharedDataRegionManager> gSharedDataRegionManager;
+
+CHRE_DATA_FLOW_MEMORY_REGION
 std::optional<DataFlowManager> gDataFlowManager;
 
 #endif  // CHRE_DATA_FLOW_SUPPORT_ENABLED
@@ -261,6 +264,21 @@ void deinitMessageRouter() {
 #endif  // CHRE_MESSAGE_ROUTER_SUPPORT_ENABLED
 }
 
+SharedDataRegionManager *initAndGetSharedDataRegionManager() {
+#ifdef CHRE_DATA_FLOW_SUPPORT_ENABLED
+  gSharedDataRegionManager.emplace();
+  return &gSharedDataRegionManager.value();
+#else
+  return nullptr;
+#endif  // CHRE_DATA_FLOW_SUPPORT_ENABLED
+}
+
+void deinitSharedDataRegionManager() {
+#ifdef CHRE_DATA_FLOW_SUPPORT_ENABLED
+  gSharedDataRegionManager.reset();
+#endif  // CHRE_DATA_FLOW_SUPPORT_ENABLED
+}
+
 DataFlowManager *initAndGetDataFlowManager() {
 #ifdef CHRE_DATA_FLOW_SUPPORT_ENABLED
   gDataFlowManager.emplace();
@@ -295,7 +313,7 @@ void initCommon(pw::span<EventLoop> eventLoops) {
       eventLoops, getBleSocketManager(), initAndGetGnssManager(),
       initAndGetWifiRequestManager(), initAndGetWwanRequestManager(),
       initAndGetChreMessageHubManager(), initAndGetHostMessageHubManager(),
-      initAndGetDataFlowManager());
+      initAndGetSharedDataRegionManager(), initAndGetDataFlowManager());
 }
 
 void deinitCommon() {
@@ -305,6 +323,7 @@ void deinitCommon() {
   deinitWwanRequestManager();
   deinitChreMessageHubManager();
   deinitHostMessageHubManager();
+  deinitSharedDataRegionManager();
   deinitDataFlowManager();
 
   // The event loop manager must be deinitialized after other managers to avoid
@@ -316,8 +335,10 @@ void deinitCommon() {
 }
 
 #ifdef CHRE_BLE_SOCKET_SUPPORT_ENABLED
-void initBleSocketManager(pw::bluetooth::proxy::ProxyHost &proxyHost) {
-  gBleSocketManager.emplace(proxyHost);
+void initBleSocketManager(
+    pw::bluetooth::proxy::ProxyHost &proxyHost,
+    pw::bluetooth::proxy::rfcomm::RfcommManager &rfcommProxyHost) {
+  gBleSocketManager.emplace(proxyHost, rfcommProxyHost);
 }
 #endif  // CHRE_BLE_SOCKET_SUPPORT_ENABLED
 

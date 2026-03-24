@@ -153,6 +153,10 @@ void EventLoop::invokeMessageFreeFunction(uint64_t appId,
     LOGE("Couldn't find app 0x%016" PRIx64 " for message free callback", appId);
     return;
   }
+  if (freeFunction == nullptr) {
+    LOGW("Null free function for app 0x%016" PRIx64 ". Skipping", appId);
+    return;
+  }
   auto prevCurrentApp = mCurrentApp;
   mCurrentApp = nanoapp;
   mCurrentApp->invokeMessageFreeCallback(freeFunction, message, messageSize);
@@ -173,10 +177,13 @@ void EventLoop::run() {
     // mEvents.pop() will be a blocking call if mEvents.empty()
     Event *event = mEvents.pop();
     // Need size() + 1 since the to-be-processed event has already been removed.
-    mPowerControlManager.preEventLoopProcess(mEvents.size() + 1);
+    EventLoopManagerSingleton::get()
+        ->getPowerControlManager()
+        .preEventLoopProcess(mEvents.size() + 1);
     distributeEvent(event);
-
-    mPowerControlManager.postEventLoopProcess(mEvents.size());
+    EventLoopManagerSingleton::get()
+        ->getPowerControlManager()
+        .postEventLoopProcess(mEvents.size());
   }
 
   // Purge the main queue of events pending distribution. All nanoapps should be
@@ -510,18 +517,19 @@ void EventLoop::logStateToBuffer(DebugDumpWrapper &debugDump) const {
   }
 }
 
-void EventLoop::onMatchingNanoappEndpoint(
+bool EventLoop::onMatchingNanoappEndpoint(
     const pw::Function<bool(const EndpointInfo &)> &function) {
   ConditionalLockGuard<Mutex> lock(mNanoappsLock, !inThisEventLoopThread());
 
   for (const UniquePtr<Nanoapp> &app : mNanoapps) {
     if (function(getEndpointInfoFromNanoappLocked(*app.get()))) {
-      break;
+      return true;
     }
   }
+  return false;
 }
 
-void EventLoop::onMatchingNanoappService(
+bool EventLoop::onMatchingNanoappService(
     const pw::Function<bool(const EndpointInfo &, const ServiceInfo &)>
         &function) {
   ConditionalLockGuard<Mutex> lock(mNanoappsLock, !inThisEventLoopThread());
@@ -547,10 +555,11 @@ void EventLoop::onMatchingNanoappService(
       ServiceInfo serviceInfo(buffer, service.version, /* minorVersion= */ 0,
                               RpcFormat::PW_RPC_PROTOBUF);
       if (function(getEndpointInfoFromNanoappLocked(*app.get()), serviceInfo)) {
-        return;
+        return true;
       }
     }
   }
+  return false;
 }
 
 std::optional<EndpointInfo> EventLoop::getEndpointInfo(uint64_t appId) {
@@ -559,6 +568,10 @@ std::optional<EndpointInfo> EventLoop::getEndpointInfo(uint64_t appId) {
   return app == nullptr
              ? std::nullopt
              : std::make_optional(getEndpointInfoFromNanoappLocked(*app));
+}
+
+PowerControlManager &EventLoop::getPowerControlManager() {
+  return EventLoopManagerSingleton::get()->getPowerControlManager();
 }
 
 void EventLoop::loadStaticNanoapps(
@@ -865,9 +878,9 @@ void EventLoop::setCycleWakeupBucketsTimer() {
   }
 
   auto callback = [](uint16_t /*type*/, void * /*data*/, void * /*extraData*/) {
-    EventLoopManagerSingleton::get()
-        ->getEventLoop()
-        .handleNanoappWakeupBuckets();
+    EventLoop *eventLoop = getCurrentEventLoop();
+    CHRE_ASSERT(eventLoop != nullptr);
+    eventLoop->handleNanoappWakeupBuckets();
   };
   mCycleWakeupBucketsHandle =
       EventLoopManagerSingleton::get()->setDelayedCallback(

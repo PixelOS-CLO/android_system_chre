@@ -29,6 +29,7 @@
 #include "chre/util/macros.h"
 #include "chre/util/system/napp_header_utils.h"
 #include "chre/util/system/napp_permissions.h"
+#include "chre/variant/config.h"
 #include "chre_api/chre/version.h"
 
 namespace chre {
@@ -62,6 +63,9 @@ bool PlatformNanoapp::start() {
   } else if (mAppInfo == nullptr) {
     LOGE("Null app info!");
   } else {
+#if CHRE_PLATFORM_OPEN_NANOAPP_ENABLED
+    sendTokenDatabaseInfo();
+#endif  // CHRE_PLATFORM_OPEN_NANOAPP_ENABLED
     NanoappMemoryGuard guard(*this);
     success = mAppInfo->entryPoints.start();
   }
@@ -116,6 +120,19 @@ const char *PlatformNanoapp::getAppName() const {
   return (mAppInfo != nullptr) ? mAppInfo->name : "Unknown";
 }
 
+bool PlatformNanoappBase::supportsRequestedThreadPriority() const {
+  return (mAppInfo != nullptr) ? (mAppInfo->structMinorVersion >=
+                                  CHRE_NSL_NANOAPP_INFO_STRUCT_MINOR_VERSION_4)
+                               : false;
+}
+
+int8_t PlatformNanoapp::getRequestedThreadPriority() const {
+  enableDramAccessIfRequired();
+  return supportsRequestedThreadPriority()
+             ? mAppInfo->requestedThreadPriority
+             : NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL;
+}
+
 uint32_t PlatformNanoapp::getTargetApiVersion() const {
   enableDramAccessIfRequired();
   return (mAppInfo != nullptr) ? mAppInfo->targetApiVersion
@@ -132,8 +149,7 @@ void PlatformNanoapp::logStateToBuffer(DebugDumpWrapper &debugDump) const {
     enableDramAccessIfRequired();
     size_t versionLen = 0;
     const char *version = getAppVersionString(&versionLen);
-    int8_t prio = (mAppInfo->structMinorVersion >=
-                   CHRE_NSL_NANOAPP_INFO_STRUCT_MINOR_VERSION_4)
+    int8_t prio = supportsRequestedThreadPriority()
                       ? mAppInfo->requestedThreadPriority
                       : NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL;
     debugDump.print("%s (%s) @ build: %.*s prio=%" PRId8, mAppInfo->name,
@@ -277,11 +293,15 @@ bool PlatformNanoappBase::verifyNanoappInfo() {
         if (!success) {
           mAppInfo = nullptr;
         } else {
+          int8_t requestedThreadPriority =
+              (supportsRequestedThreadPriority()
+                   ? mAppInfo->requestedThreadPriority
+                   : NANOAPP_REQUESTED_THREAD_PRIORITY_NORMAL);
           LOGI("Nanoapp loaded: %s (0x%016" PRIx64 ") version 0x%" PRIx32
-               " (%s) uimg %d system %d",
+               " (%s) uimg %d system %d requestedPrio=%" PRId8,
                mAppInfo->name, mAppInfo->appId, mAppInfo->appVersion,
                mAppInfo->appVersionString, mAppInfo->isTcmNanoapp,
-               mAppInfo->isSystemNanoapp);
+               mAppInfo->isSystemNanoapp, requestedThreadPriority);
         }
       }
     }
@@ -299,7 +319,19 @@ void PlatformNanoappBase::sendTokenDatabaseInfo() {
                                              databaseSize);
 }
 
+#if CHRE_PLATFORM_OPEN_NANOAPP_ENABLED
+bool PlatformNanoapp::isOpen() const {
+  return mIsStatic || (mDsoHandle != nullptr);
+}
+
+bool PlatformNanoapp::openNanoapp() {
+  if (isOpen()) return true;
+
+  //! Always force DRAM access when opening since nanoapps are loaded via DRAM.
+  forceDramAccess();
+#else
 bool PlatformNanoappBase::openNanoapp() {
+#endif  // CHRE_PLATFORM_OPEN_NANOAPP_ENABLED
   bool success = false;
   if (mIsStatic) {
     success = true;
@@ -315,9 +347,15 @@ bool PlatformNanoappBase::openNanoapp() {
     } else {
       mDsoHandle = dlopenbuf(binaryStart, mExpectedTcmCapable);
       success = verifyNanoappInfo();
+#if !CHRE_PLATFORM_OPEN_NANOAPP_ENABLED
+      // If openNanoapp() is called outside of start(), we can't send the
+      // token database info since the nanoapp hasn't been loaded in the
+      // EventLoop yet (and therefore hasn't been assigned an instance ID).
+      // In this case, the call to sendTokenDatabaseInfo is deferred to start().
       if (success) {
         sendTokenDatabaseInfo();
       }
+#endif  // CHRE_PLATFORM_OPEN_NANOAPP_ENABLED
     }
   }
 

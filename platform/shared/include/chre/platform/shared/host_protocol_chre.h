@@ -22,6 +22,8 @@
 
 #include <optional>
 #include "chre/core/ble_l2cap_coc_socket_data.h"
+#include "chre/core/bt_socket_data.h"
+#include "chre/core/event_loop.h"
 #include "chre/core/nanoapp.h"
 #include "chre/core/settings.h"
 #include "chre/platform/shared/fbs/host_messages_generated.h"
@@ -34,6 +36,8 @@
 #include "flatbuffers/flatbuffers.h"
 
 #include "pw_allocator/unique_ptr.h"
+#include "pw_function/function.h"
+#include "pw_span/span.h"
 
 namespace chre {
 
@@ -65,6 +69,7 @@ class HostMessageHandlers {
     UniquePtr<Nanoapp> nanoapp;
     uint32_t fragmentId;
     bool sendFragmentResponse;
+    pw::Function<EventLoop *(Nanoapp *)> getEventLoopFn;
   };
 
   static void handleNanoappMessage(uint64_t appId, uint32_t messageType,
@@ -106,8 +111,28 @@ class HostMessageHandlers {
 
   static void handleNanConfigurationUpdate(bool enabled);
 
+  /**
+   * Handles a BT socket open request for a L2CAP CoC socket.
+   *
+   * @param hubId The ID of the hub that originated this message.
+   * @param socketData The data for the L2CAP CoC socket.
+   * @param name The name of the socket.
+   * @param psm The Protocol/Service Multiplexer (PSM) value.
+   */
   static void handleBtSocketOpen(uint64_t hubId,
                                  const BleL2capCocSocketData &socketData,
+                                 const char *name, uint32_t psm);
+
+  /**
+   * Handles a BT socket open request for an RFCOMM socket.
+   *
+   * @param hubId The ID of the hub that originated this message.
+   * @param socketData The data for the RFCOMM socket.
+   * @param name The name of the socket.
+   * @param psm The Protocol/Service Multiplexer (PSM) value.
+   */
+  static void handleBtSocketOpen(uint64_t hubId,
+                                 const BtRfcommChannelSocketData &socketData,
                                  const char *name, uint32_t psm);
 
   static void handleBtSocketCapabilitiesRequest();
@@ -121,6 +146,9 @@ class HostMessageHandlers {
 
   static void finishLoadingNanoappCallback(
       SystemCallbackType type, UniquePtr<LoadNanoappCallbackData> &&cbData);
+
+  static void startNanoappCallback(SystemCallbackType type,
+                                   UniquePtr<LoadNanoappCallbackData> &&cbData);
 
   /**
    * Helper function that loads a nanoapp into the system
@@ -137,9 +165,17 @@ class HostMessageHandlers {
    * @param bufferLen the size of buffer in bytes
    * @param fragmentId the identifier indicating which fragment is being loaded
    * @param appBinaryLen the full size of the nanoapp binary to be loaded
-   *
-   * @return void
+   * @param getEventLoopFn A function that returns the event loop to load the
+   *     nanoapp on. This will be invoked after a call to openNanoapp().
    */
+  static void loadNanoappData(
+      uint16_t hostClientId, uint32_t transactionId, uint64_t appId,
+      uint32_t appVersion, uint32_t appFlags, uint32_t targetApiVersion,
+      const void *buffer, size_t bufferLen, uint32_t fragmentId,
+      size_t appBinaryLen, bool respondBeforeStart,
+      pw::Function<EventLoop *(Nanoapp *)> getEventLoopFn);
+
+  /** A version of loadNanoappData that loads to the main event loop. */
   static void loadNanoappData(uint16_t hostClientId, uint32_t transactionId,
                               uint64_t appId, uint32_t appVersion,
                               uint32_t appFlags, uint32_t targetApiVersion,
@@ -522,12 +558,15 @@ class HostProtocolChre : public HostProtocolCommon {
    * @param sinkMetadataRegionId The ID of the sink metadata shared memory
    * region.
    * @param sinkMetadataOffset The offset of the sink metadata in its region.
+   * @param sessionMessage Optional message used to pass this registration over
+   * an existing session.
    */
   static void encodeRegisterDataFlowSink(
       ChreFlatBufferBuilder &builder, const message::DataFlowId &dataFlowId,
       const message::Endpoint &source, const message::Endpoint &sink,
       int32_t primaryRegionId, uint32_t metadataOffset,
-      int32_t sinkMetadataRegionId, uint32_t sinkMetadataOffset);
+      int32_t sinkMetadataRegionId, uint32_t sinkMetadataOffset,
+      const message::Message *sessionMessage);
 
   /**
    * Encodes an UnregisterDataFlowSink message.
@@ -550,21 +589,21 @@ class HostProtocolChre : public HostProtocolCommon {
    */
   static void encodeDataFlowStopped(
       ChreFlatBufferBuilder &builder, const message::DataFlowId &dataFlowId,
-      const std::optional<DynamicVector<message::Endpoint>>
-          &destinationEndpoints = std::nullopt);
+      std::optional<pw::span<const message::Endpoint>> destinationEndpoints =
+          std::nullopt);
 
   /**
    * Encodes a DataFlowAlert message.
    *
    * @param builder Builder which assembles and stores the message.
    * @param dataFlowId The ID of the data flow the alert is associated with.
-   * @param senderEndpoint The sending endpoint.
    * @param receiverEndpoints The receiving endpoint(s).
+   * @param waking Whether the alert is waking (should wake the core(s) hosting
+   * the receiver(s), take wakelocks, etc)
    */
   static void encodeDataFlowAlert(
       ChreFlatBufferBuilder &builder, const message::DataFlowId &dataFlowId,
-      const message::Endpoint &senderEndpoint,
-      const DynamicVector<message::Endpoint> &receiverEndpoints);
+      pw::span<const message::Endpoint> receiverEndpoints, bool waking);
 };
 
 }  // namespace chre

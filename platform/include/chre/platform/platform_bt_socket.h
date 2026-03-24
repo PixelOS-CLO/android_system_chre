@@ -50,6 +50,12 @@ class PlatformBtSocket : public PlatformBtSocketBase {
                    PlatformBtSocketResources &platformBtSocketResources)
       : PlatformBtSocketBase(socketData, platformBtSocketResources) {}
 
+#ifdef CHRE_BT_RFCOMM_SOCKET_SUPPORT_ENABLED
+  PlatformBtSocket(const BtRfcommChannelSocketData &socketData,
+                   PlatformBtSocketResources &platformBtSocketResources)
+      : PlatformBtSocketBase(socketData, platformBtSocketResources) {}
+#endif  // CHRE_BT_RFCOMM_SOCKET_SUPPORT_ENABLED
+
   ~PlatformBtSocket();
 
   // Delete the copy constructor
@@ -57,22 +63,34 @@ class PlatformBtSocket : public PlatformBtSocketBase {
   // Disable copy assignment constructor
   PlatformBtSocket &operator=(const PlatformBtSocket &other) = delete;
 
+  SocketType getSocketType() {
+    return mSocketType;
+  }
+
   void setSocketAccepted(bool accepted) {
     mSocketAccepted = accepted;
   }
 
-  bool getSocketAccepted() {
+  bool getSocketAccepted() const {
     return mSocketAccepted;
   }
 
   uint64_t getId();
 
-  uint16_t getNanoappInstanceId() {
+  uint16_t getNanoappInstanceId() const {
     return mInstanceId;
   }
 
   void setNanoappInstanceId(uint16_t instanceId) {
     mInstanceId = instanceId;
+  }
+
+  uint64_t getNanoappAppId() {
+    return mAppId;
+  }
+
+  void setNanoappAppId(uint64_t appId) {
+    mAppId = appId;
   }
 
   /**
@@ -97,6 +115,9 @@ class PlatformBtSocket : public PlatformBtSocketBase {
  private:
   // Nanoapp instance ID.
   uint16_t mInstanceId = 0;
+
+  // Nanoapp ID.
+  uint64_t mAppId = 0;
 
   // Whether the nanoapp accepted the socket.
   bool mSocketAccepted = false;

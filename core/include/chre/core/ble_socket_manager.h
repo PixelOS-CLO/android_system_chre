@@ -19,10 +19,12 @@
 #ifdef CHRE_BLE_SOCKET_SUPPORT_ENABLED
 
 #include "chre/core/ble_l2cap_coc_socket_data.h"
+#include "chre/core/bt_socket_data.h"
 #include "chre/core/multi_threading_api_mutex.h"
 #include "chre/platform/platform_bt_socket.h"
 #include "chre/platform/platform_bt_socket_resources.h"
 #include "chre/util/memory_pool.h"
+#include "chre/variant/config.h"
 #include "chre_api/chre.h"
 
 namespace chre {
@@ -34,7 +36,10 @@ namespace chre {
 class BleSocketManager : public NonCopyable {
  public:
   // Public for testing purposes.
-  static constexpr uint8_t kMaxNumSockets = 2;
+  static constexpr uint8_t kMaxNumLeCocSockets = CHRE_BLE_LE_COC_MAX_SOCKETS;
+
+  // Public for testing purposes.
+  static constexpr uint8_t kMaxNumRfcommSockets = CHRE_BT_RFCOMM_MAX_SOCKETS;
 
   // Forward all arguments passed to the BleSocketManager constructor to the
   // PlatformBtSocketResources constructor
@@ -52,36 +57,46 @@ class BleSocketManager : public NonCopyable {
    * event loop thread before processing the socket open request with
    * handleSocketOpenedByHostSync.
    *
-   * @param socketData Metadata for the BLE socket.
+   * @param socketData Metadata for the socket.
    */
-  void handleSocketOpenedByHost(const BleL2capCocSocketData &socketData);
+  template <typename SocketDataType>
+  static void handleSocketOpenedByHost(const SocketDataType &socketData);
 
   /**
-   * Callback a nanoapp uses to accept the socket. This will be used in the
-   * middle of socketConnected and is part of a synchronous interaction with the
-   * nanoapp
+   * Validates if a socket ID is currently managed by CHRE. This is used by
+   * nanoapps to accept an incoming socket connection.
+   *
+   * @param socketId The ID of the socket to find.
+   * @return true if the socket exists, false otherwise.
    */
-  bool acceptBleSocket(uint64_t socketId);
+  bool acceptBleSocket(uint64_t socketId) {
+    PlatformBtSocket *btSocket = findPlatformBtSocket(socketId);
+    if (btSocket != nullptr) {
+      btSocket->setSocketAccepted(true);
+    }
+    return btSocket != nullptr;
+  }
 
   /**
    * Sends a packet to the socket.
    *
    * @see chreBleSocketSend
    */
-  int32_t sendBleSocketPacket(uint64_t socketId, const void *data,
-                              uint16_t length,
+  int32_t sendBleSocketPacket(uint64_t appId, uint64_t socketId,
+                              const void *data, uint16_t length,
                               chreBleSocketPacketFreeFunction *freeCallback);
 
   /**
    * Handles a request to free the socket packet from the platform. Switches the
    * context to the event loop thread before freeing the socket packet.
    *
+   * @param appId ID of the nanoapp that owns the socket packet.
    * @param data Socket packet to be freed.
    * @param length Length of socket packet.
    * @param freeCallback @see chreBleSocketPacketFreeFunction
    */
-  void freeSocketPacket(void *data, uint16_t length,
-                        chreBleSocketPacketFreeFunction *freeCallback);
+  static void freeSocketPacket(uint64_t appId, void *data, uint16_t length,
+                               chreBleSocketPacketFreeFunction *freeCallback);
 
   /**
    * Handles a socket event originating from the platform. Switches the context
@@ -91,7 +106,8 @@ class BleSocketManager : public NonCopyable {
    * @param socketId Identifies socket which the event is for.
    * @param socketEvent Socket event to be processed.
    */
-  void handlePlatformSocketEvent(uint64_t socketId, SocketEvent socketEvent);
+  static void handlePlatformSocketEvent(uint64_t socketId,
+                                        SocketEvent socketEvent);
 
   /**
    * Handles a socket packet from the platform. Switches the context to the
@@ -102,8 +118,8 @@ class BleSocketManager : public NonCopyable {
    * @param data Socket packet data.
    * @param length Socket packet data length.
    */
-  void handlePlatformSocketPacket(uint64_t socketId, const uint8_t *data,
-                                  uint16_t length);
+  static void handlePlatformSocketPacket(uint64_t socketId, const uint8_t *data,
+                                         uint16_t length);
 
   /**
    * Closes the sockets belonging to a nanoapp when it is unloaded.
@@ -120,13 +136,14 @@ class BleSocketManager : public NonCopyable {
    *
    * @param socketId Socket ID to be closed.
    */
-  void handleSocketClosedByHost(uint64_t socketId);
+  static void handleSocketClosedByHost(uint64_t socketId);
 
  private:
   /**
    * @see handleSocketOpenedByHost
    */
-  void handleSocketOpenedByHostSync(const BleL2capCocSocketData &socketData)
+  template <typename SocketDataType>
+  void handleSocketOpenedByHostSync(const SocketDataType &socketData)
       CHRE_REQUIRES(getMultiThreadingApiMutex());
 
   /**
@@ -155,7 +172,8 @@ class BleSocketManager : public NonCopyable {
    * and move assignment operators. Look into adding move assignment operators
    * to those dependencies and refactor this code when finished.
    */
-  MemoryPool<PlatformBtSocket, kMaxNumSockets> mBtSockets;
+  MemoryPool<PlatformBtSocket, kMaxNumLeCocSockets + kMaxNumRfcommSockets>
+      mBtSockets;
 
   /**
    * Platform resources used for creating a new BT socket.
@@ -164,9 +182,8 @@ class BleSocketManager : public NonCopyable {
 
   PlatformBtSocket *findPlatformBtSocket(uint64_t socketId) {
     return mBtSockets.find(
-        [](PlatformBtSocket *btSocket, void *data) {
-          uint64_t socketId = *(static_cast<uint64_t *>(data));
-          return (btSocket->getId() == socketId);
+        [](PlatformBtSocket *btSocket, void *targetSocketId) {
+          return btSocket->getId() == *static_cast<uint64_t *>(targetSocketId);
         },
         &socketId);
   }

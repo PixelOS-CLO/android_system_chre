@@ -98,6 +98,7 @@ SLPI_QSH_CFLAGS += -DCHRE_SLPI_SEE
 SLPI_SRCS += platform/shared/assert.cc
 SLPI_SRCS += platform/shared/chre_api_audio.cc
 SLPI_SRCS += platform/shared/chre_api_core.cc
+SLPI_SRCS += platform/shared/chre_api_data_flow.cc
 SLPI_SRCS += platform/shared/chre_api_gnss.cc
 SLPI_SRCS += platform/shared/chre_api_msg.cc
 SLPI_SRCS += platform/shared/chre_api_re.cc
@@ -559,14 +560,12 @@ TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/platform_gnss.cc
 endif
 
 ifeq ($(CHRE_WIFI_SUPPORT_ENABLED), true)
-TINYSYS_SRCS += platform/shared/platform_wifi.cc
+TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/platform_wifi.cc
 endif
 
 ifeq ($(CHRE_WWAN_SUPPORT_ENABLED), true)
-TINYSYS_SRCS += platform/shared/platform_wwan.cc
+TINYSYS_SRCS += $(CHRE_PREFIX)/platform/shared/platform_wwan.cc
 endif
-
-# Compiler flags
 
 # Variables
 TINYSYS_PLATFORM = mt6989

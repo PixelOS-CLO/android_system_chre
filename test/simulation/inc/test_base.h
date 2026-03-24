@@ -27,6 +27,7 @@
 #include "chre/platform/assert.h"
 #include "chre/platform/system_time.h"
 #include "chre/platform/system_timer.h"
+#include "chre/util/pigweed/default_pw_allocator.h"
 #include "chre/util/system/message_router.h"
 #include "chre/util/time.h"
 #include "mock_bt_offload.h"
@@ -34,6 +35,7 @@
 #include "test_util.h"
 
 #include "pw_bluetooth_proxy/proxy_host.h"
+#include "pw_bluetooth_proxy/rfcomm/rfcomm_manager.h"
 
 namespace chre {
 
@@ -110,19 +112,21 @@ class TestBase : public testing::Test {
    * @return A pointer to the Nanoapp instance or nullptr if not found.
    */
   static Nanoapp *getNanoappByAppId(uint64_t id) {
-    uint16_t instanceId;
-    EXPECT_TRUE(EventLoopManagerSingleton::get()
-                    ->getEventLoop()
-                    .findNanoappInstanceIdByAppId(id, &instanceId));
-    Nanoapp *nanoapp = EventLoopManagerSingleton::get()
-                           ->getEventLoop()
-                           .findNanoappByInstanceId(instanceId);
+    EventLoop *eventLoop =
+        EventLoopManagerSingleton::get()->getEventLoopByAppId(id);
+    CHRE_ASSERT(eventLoop != nullptr);
+    Nanoapp *nanoapp = eventLoop->findNanoappByAppId(id);
     EXPECT_NE(nanoapp, nullptr);
     return nanoapp;
   }
 
   virtual EventLoop *getEventLoopForRequestedPriority(
       int8_t requestedThreadPriority) = 0;
+
+  /**
+   * Prints the event loop information for debugging purposes.
+   */
+  virtual void printEventLoopInfo() = 0;
 
   uint64_t loadNanoapp(UniquePtr<TestNanoapp> app) {
     EventLoop *eventLoop =
@@ -150,18 +154,23 @@ class TestBase : public testing::Test {
     }
   };
 
+  DefaultPwAllocator mPwAllocator;
   MemberInitLogger mInitLogger;
   std::thread mChreThread;
   SystemTimer mSystemTimer;
   message::MessageRouter::MessageHub mChreMessageHub;
   MockBtOffload mMockBtOffload;
   std::optional<pw::bluetooth::proxy::ProxyHost> mProxyHost;
+  std::optional<pw::bluetooth::proxy::rfcomm::RfcommManager> mRfcommProxyHost;
 };
 
 /*
  * A base class for all CHRE simulated tests that only requires a single thread.
  */
 class SingleThreadTestBase : public TestBase {
+ public:
+  void printEventLoopInfo() override;
+
  protected:
   void SetUp() override;
   void TearDown() override;
@@ -180,6 +189,9 @@ class SingleThreadTestBase : public TestBase {
  */
 template <size_t kNumEventLoops = 2>
 class MultiThreadTestBaseT : public TestBase {
+ public:
+  void printEventLoopInfo() override;
+
  protected:
   void SetUp() override;
   void TearDown() override;

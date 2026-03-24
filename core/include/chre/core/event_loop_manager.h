@@ -30,6 +30,7 @@
 #include "chre/core/host_message_hub_manager.h"
 #include "chre/core/sensor_request_manager.h"
 #include "chre/core/settings.h"
+#include "chre/core/shared_data_region_manager.h"
 #include "chre/core/system_health_monitor.h"
 #include "chre/core/telemetry_manager.h"
 #include "chre/core/timer_pool.h"
@@ -41,10 +42,12 @@
 #include "chre/platform/mutex.h"
 #include "chre/util/always_false.h"
 #include "chre/util/fixed_size_vector.h"
+#include "chre/util/lock_guard.h"
 #include "chre/util/non_copyable.h"
 #include "chre/util/singleton.h"
 #include "chre/util/system/system_callback_type.h"
 #include "chre/util/unique_ptr.h"
+#include "chre/util/unlock_guard.h"
 #include "chre_api/chre/event.h"
 #include "pw_span/span.h"
 
@@ -67,6 +70,7 @@ class WwanRequestManager;
 class ChreMessageHubManager;
 class HostMessageHubManager;
 class DataFlowManager;
+class SharedDataRegionManager;
 
 /**
  * A class that keeps track of all event loops in the system. This class
@@ -102,15 +106,16 @@ class EventLoopManager : public NonCopyable {
                    WwanRequestManager *wwanRequestManager,
                    ChreMessageHubManager *chreMessageHubManager,
                    HostMessageHubManager *hostMessageHubManager,
+                   SharedDataRegionManager *sharedDataRegionManager,
                    DataFlowManager *dataFlowManager)
       : mEventLoops(checkEventLoops(eventLoops)),
         mBleSocketManager(bleSocketManager),
         mGnssManager(gnssManager),
-        mHostCommsManager(&getEventLoop()),
         mWifiRequestManager(wifiRequestManager),
         mWwanRequestManager(wwanRequestManager),
         mChreMessageHubManager(chreMessageHubManager),
         mHostMessageHubManager(hostMessageHubManager),
+        mSharedDataRegionManager(sharedDataRegionManager),
         mDataFlowManager(dataFlowManager) {
 #ifdef CHRE_BLE_SOCKET_SUPPORT_ENABLED
     CHRE_ASSERT(mBleSocketManager != nullptr);
@@ -129,6 +134,7 @@ class EventLoopManager : public NonCopyable {
     CHRE_ASSERT(mHostMessageHubManager != nullptr);
 #endif  // CHRE_MESSAGE_ROUTER_SUPPORT_ENABLED
 #ifdef CHRE_DATA_FLOW_SUPPORT_ENABLED
+    CHRE_ASSERT(mSharedDataRegionManager != nullptr);
     CHRE_ASSERT(mDataFlowManager != nullptr);
 #endif  // CHRE_DATA_FLOW_SUPPORT_ENABLED
   }
@@ -603,6 +609,10 @@ class EventLoopManager : public NonCopyable {
     return *mHostMessageHubManager;
   }
 
+  SharedDataRegionManager &getSharedDataRegionManager() {
+    return *mSharedDataRegionManager;
+  }
+
   DataFlowManager &getDataFlowManager() {
     return *mDataFlowManager;
   }
@@ -612,6 +622,13 @@ class EventLoopManager : public NonCopyable {
    */
   TimerPool &getTimerPool() {
     return mTimerPool;
+  }
+
+  /**
+   * @return The global power control manager.
+   */
+  PowerControlManager &getPowerControlManager() {
+    return mPowerControlManager;
   }
 
   /**
@@ -696,6 +713,46 @@ Same as chreBleGetFilterCapabilities, but must be called with the global API
    * @return The WWAN capabilities.
    */
   uint32_t getWwanCapabilitiesLocked();
+
+  /**
+   * Iterates through all nanoapps in all event loops and calls the provided
+   * function for each nanoapp's endpoint.
+   *
+   * @param function The function to call for each endpoint. Return true to stop
+   *     iteration.
+   */
+  void onMatchingNanoappEndpoint(
+      const pw::Function<bool(const message::EndpointInfo &)> &function);
+
+  /**
+   * Gets the endpoint info for a given endpoint ID by searching through all
+   * event loops.
+   *
+   * @param endpointId The endpoint ID to search for.
+   * @return The endpoint info if found, otherwise std::nullopt.
+   */
+  std::optional<message::EndpointInfo> getEndpointInfo(
+      message::EndpointId endpointId);
+
+  /**
+   * Checks if a nanoapp has a legacy RPC service.
+   *
+   * @param nanoappId The app ID of the nanoapp.
+   * @param serviceId The service ID to check for.
+   * @return true if the nanoapp has the service, false otherwise.
+   */
+  bool doesNanoappHaveLegacyService(uint64_t nanoappId, uint64_t serviceId);
+
+  /**
+   * Iterates through all nanoapps in all event loops and calls the provided
+   * function for each nanoapp's service.
+   *
+   * @param function The function to call for each service. Return true to stop
+   *     iteration.
+   */
+  void onMatchingNanoappService(
+      const pw::Function<bool(const message::EndpointInfo &,
+                              const message::ServiceInfo &)> &function);
 
  private:
   /**
@@ -812,12 +869,18 @@ Same as chreBleGetFilterCapabilities, but must be called with the global API
   //! The HostMessageHubManager handling communication with host message hubs.
   HostMessageHubManager *mHostMessageHubManager = nullptr;
 
+  //! The SharedDataRegionManager handling management of shared data regions.
+  SharedDataRegionManager *mSharedDataRegionManager = nullptr;
+
   //! The DataFlowManager handling data flow support.
   DataFlowManager *mDataFlowManager = nullptr;
 
   //! A global mutex used to synchronize concurrent CHRE API calls across
   //! potentially multiple threads, or no-op if multi-threading is not enabled.
   MultiThreadingApiMutex mGlobalApiMutex;
+
+  //! The object which manages power related controls.
+  PowerControlManager mPowerControlManager;
 };
 
 //! Provide an alias to the EventLoopManager singleton.
@@ -846,6 +909,18 @@ class GlobalApiLockGuard : public LockGuard<MultiThreadingApiMutex> {
             *EventLoopManagerSingleton::get()->getGlobalApiMutex()) {}
 };
 
+/**
+ * A convenience class to release and re-acquire the global API mutex.
+ * This is useful for temporarily releasing the global lock to call a function
+ * that may re-acquire it.
+ * The lock is released upon construction and re-acquired upon destruction.
+ */
+class GlobalApiUnlockGuard : public UnlockGuard<MultiThreadingApiMutex> {
+ public:
+  GlobalApiUnlockGuard()
+      : UnlockGuard<MultiThreadingApiMutex>(
+            *EventLoopManagerSingleton::get()->getGlobalApiMutex()) {}
+};
 }  // namespace chre
 
 #endif  // CHRE_CORE_EVENT_LOOP_MANAGER_H_

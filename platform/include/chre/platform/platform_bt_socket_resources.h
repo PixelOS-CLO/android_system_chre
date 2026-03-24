@@ -29,6 +29,7 @@ class PlatformBtSocketResources : public PlatformBtSocketResourcesBase {
       : PlatformBtSocketResourcesBase(std::forward<Args>(args)...) {}
 
   uint32_t getLeCocMtu();
+  uint32_t getRfcommMaxFrameSize();
 };
 
 }  // namespace chre
