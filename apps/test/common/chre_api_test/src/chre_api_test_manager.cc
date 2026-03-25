@@ -27,9 +27,7 @@
 
 namespace {
 
-constexpr uint64_t kSyncFunctionTimeout =
-    5 * chre::kOneSecondInNanoseconds +
-    100 * chre::kOneMillisecondInNanoseconds;
+constexpr uint64_t kSyncFunctionTimeout = 2 * chre::kOneSecondInNanoseconds;
 
 /**
  * The following constants are defined in chre_api_test.options.

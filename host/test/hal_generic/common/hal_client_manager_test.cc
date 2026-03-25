@@ -561,32 +561,6 @@ TEST_F(HalClientManagerTest, handleChreRestart) {
   halClientManager->handleChreRestart();
 }
 
-TEST_F(HalClientManagerTest, IsSystemServer) {
-  auto halClientManager = std::make_unique<HalClientManagerForTest>(
-      mockDeadClientUnlinker, kClientIdMappingFilePath);
-  std::shared_ptr<ContextHubCallbackForTest> systemCallback =
-      ContextHubCallbackForTest::make<ContextHubCallbackForTest>(
-          kSystemServerUuid);
-  std::shared_ptr<ContextHubCallbackForTest> vendorCallback =
-      ContextHubCallbackForTest::make<ContextHubCallbackForTest>(kVendorUuid);
-
-  // Register the system server callback
-  EXPECT_TRUE(halClientManager->registerCallback(
-      kSystemServerPid, systemCallback, /* deathRecipientCookie= */ nullptr));
-  // Register the vendor callback
-  EXPECT_TRUE(halClientManager->registerCallback(
-      kVendorPid, vendorCallback, /* deathRecipientCookie= */ nullptr));
-
-  // Check isSystemServer for a known system server pid, expecting true.
-  EXPECT_TRUE(halClientManager->isSystemServer(kSystemServerPid));
-
-  // Check isSystemServer for a known vendor pid, expecting false.
-  EXPECT_FALSE(halClientManager->isSystemServer(kVendorPid));
-
-  // Check isSystemServer for an unknown pid, expecting false.
-  EXPECT_FALSE(halClientManager->isSystemServer(kSystemServerPid + kVendorPid));
-}
-
 TEST_F(HalClientManagerTest, getAllConnectedCallbacks) {
   auto halClientManager = std::make_unique<HalClientManagerForTest>(
       mockDeadClientUnlinker, kClientIdMappingFilePath);
@@ -604,55 +578,6 @@ TEST_F(HalClientManagerTest, getAllConnectedCallbacks) {
 
   EXPECT_THAT(halClientManager->getCallbacks(),
               UnorderedElementsAre(vendorCallback, systemCallback));
-}
-
-TEST_F(HalClientManagerTest, GetPendingTransactions) {
-  auto halClientManager = std::make_unique<HalClientManagerForTest>(
-      mockDeadClientUnlinker, kClientIdMappingFilePath);
-  std::shared_ptr<ContextHubCallbackForTest> callback =
-      ContextHubCallbackForTest::make<ContextHubCallbackForTest>(
-          kSystemServerUuid);
-  EXPECT_TRUE(halClientManager->registerCallback(
-      kSystemServerPid, callback, /* deathRecipientCookie= */ nullptr));
-  HalClientId clientId = halClientManager->getClientId(kSystemServerPid);
-
-  // Initially, no transactions should be pending.
-  EXPECT_FALSE(halClientManager->getPendingLoadTransaction().has_value());
-  EXPECT_FALSE(halClientManager->getPendingUnloadTransaction().has_value());
-
-  // Register a load transaction and verify it can be retrieved.
-  uint32_t loadTransactionId = 1;
-  EXPECT_TRUE(halClientManager->registerPendingLoadTransaction(
-      kSystemServerPid, createLoadTransaction(loadTransactionId)));
-
-  std::optional<HalClientManager::PendingTransaction> loadTransaction =
-      halClientManager->getPendingLoadTransaction();
-  ASSERT_TRUE(loadTransaction.has_value());
-  EXPECT_EQ(loadTransaction->clientId, clientId);
-  EXPECT_EQ(loadTransaction->transactionId, loadTransactionId);
-  EXPECT_FALSE(halClientManager->getPendingUnloadTransaction().has_value());
-
-  // Reset the load transaction and verify it's gone.
-  halClientManager->resetPendingLoadTransaction();
-  EXPECT_FALSE(halClientManager->getPendingLoadTransaction().has_value());
-
-  // Register an unload transaction and verify it can be retrieved.
-  uint32_t unloadTransactionId = 2;
-  uint64_t nanoappId = 0x1234;
-  EXPECT_TRUE(halClientManager->registerPendingUnloadTransaction(
-      kSystemServerPid, unloadTransactionId, nanoappId));
-
-  std::optional<HalClientManager::PendingTransaction> unloadTransaction =
-      halClientManager->getPendingUnloadTransaction();
-  ASSERT_TRUE(unloadTransaction.has_value());
-  EXPECT_EQ(unloadTransaction->clientId, clientId);
-  EXPECT_EQ(unloadTransaction->transactionId, unloadTransactionId);
-  EXPECT_EQ(unloadTransaction->nanoappId, nanoappId);
-  EXPECT_FALSE(halClientManager->getPendingLoadTransaction().has_value());
-
-  // Reset the unload transaction and verify it's gone.
-  halClientManager->resetPendingUnloadTransaction(clientId, unloadTransactionId);
-  EXPECT_FALSE(halClientManager->getPendingUnloadTransaction().has_value());
 }
 
 }  // namespace

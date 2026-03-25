@@ -32,7 +32,6 @@ class ChreApiWifiFunctions {
   virtual ~ChreApiWifiFunctions() = default;
 
   // These APIs are defined at
-  // chre_api/include/chre_api/chre/wifi.h
   virtual uint32_t GetCapabilities();
   virtual bool ConfigureScanMonitorAsync(bool enable, const void *cookie);
   virtual bool RequestScanAsync(const chreWifiScanParams *params,

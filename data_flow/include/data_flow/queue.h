@@ -334,7 +334,7 @@ class Producer : protected internal::ProducerBase {
     Producer producer(region, *queuePtr, blockCapacity, maxBlockCount,
                       minBlockCount, dataNotifier, /*remoteNotifyFn=*/{},
                       memAccess);
-    PW_TRY(producer.initialize(internal::initFixedSizeDataBlock));
+    PW_TRY(producer.initialize(/*variableData=*/false));
     return producer;
   }
 
@@ -361,7 +361,7 @@ class Producer : protected internal::ProducerBase {
     Producer producer(region, *queuePtr, blockCapacity, maxBlockCount,
                       minBlockCount, dataNotifier, std::move(notifyArgs.fn),
                       memAccess);
-    PW_TRY(producer.initialize(internal::initFixedSizeDataBlock));
+    PW_TRY(producer.initialize(/*variableData=*/false));
     return producer;
   }
 
@@ -808,12 +808,7 @@ class VariableDataProducer : protected internal::ProducerBase {
    * Clears the first element index in the new block.
    */
   void enterNextBlock(internal::BlockHeader *&block, uint32_t *correction,
-                      uint32_t &index, bool convertSkipToBase,
-                      std::optional<uint32_t> writeIndex) override;
-
-  internal::InitBlockFn getInitBlockFn() override {
-    return internal::initVariableDataBlock;
-  }
+                      uint32_t &index, bool convertSkipToBase) override;
 
   // If set, size of the current reserved element in shared memory.
   internal::VariableElementHeader *mCurrentHdrPtr = nullptr;
@@ -894,7 +889,6 @@ class VariableDataConsumer : protected internal::ConsumerBase {
    */
   pw::Status release() {
     ScopedMemoryAccess memAccessScope(mMemAccess, mMemAccessCnt);
-    PW_TRY(checkState());
     PW_TRY(releaseNoNotify());
     maybeNotifyOnRead();
     return pw::OkStatus();

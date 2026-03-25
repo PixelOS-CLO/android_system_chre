@@ -33,10 +33,6 @@ class EndpointEchoTestService final
  public:
   void RunNanoappToHostTest(const google_protobuf_Empty &request,
                             ServerWriter<chre_rpc_ReturnStatus> &writer);
-
-  void RunNanoappGetEndpointInfoTest(
-      const chre_rpc_HostEndpointInfo &request,
-      ServerWriter<chre_rpc_ReturnStatus> &writer);
 };
 
 /**
@@ -72,16 +68,11 @@ class EndpointEchoTestManager {
   void setPermissionForNextMessage(uint32_t permission);
 
   /**
-   * Starts the nanoapp-initiated part of the test. If hostEndpointInfo
-   * is provided, starts the sequence to verify endpoint info; otherwise,
-   * starts the sequence to test endpoint echo.
-   * @param writer            The writer to use to send the test status.
-   * @param hostEndpointInfo  The expected host endpoint info.
+   * Starts the nanoapp-initiated part of the test.
+   * @param writer The writer to use to send the test status.
    */
   void startTest(
-      EndpointEchoTestService::ServerWriter<chre_rpc_ReturnStatus> &&writer,
-      chre::Optional<chre_rpc_HostEndpointInfo> hostEndpointInfo =
-          chre::Optional<chre_rpc_HostEndpointInfo>());
+      EndpointEchoTestService::ServerWriter<chre_rpc_ReturnStatus> &&writer);
 
  private:
   /** The service descriptor for the echo service. */
@@ -145,12 +136,6 @@ class EndpointEchoTestManager {
   /** Sends a test fail status to the host. */
   void failTest(const char *errorMessage);
 
-  /**
-   * Validates the endpoint info against the expected values in the request.
-   * @param info The session info containing the hub ID and endpoint ID.
-   */
-  void validateEndpointInfo(const chreMsgSessionInfo *info);
-
   /** pw_rpc service used to process the RPCs. */
   EndpointEchoTestService mEndpointEchoTestService;
 
@@ -172,9 +157,6 @@ class EndpointEchoTestManager {
 
   /** The session ID for the echo service. */
   uint16_t mSessionId = CHRE_MSG_SESSION_ID_INVALID;
-
-  /** The rpc request received for endpoint info verification. */
-  chre::Optional<chre_rpc_HostEndpointInfo> mHostEndpointInfo;
 
   /** The message to send for the test. */
   uint8_t mMessageBuffer[10];

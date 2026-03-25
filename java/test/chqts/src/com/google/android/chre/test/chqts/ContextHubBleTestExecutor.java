@@ -19,7 +19,6 @@ package com.google.android.chre.test.chqts;
 import static android.bluetooth.BluetoothDevice.TRANSPORT_LE;
 
 import static com.google.common.truth.Truth.assertThat;
-import static com.google.common.truth.Truth.assertWithMessage;
 
 import static java.util.concurrent.TimeUnit.SECONDS;
 
@@ -706,11 +705,6 @@ public class ContextHubBleTestExecutor extends ContextHubChreApiTestExecutor {
         if (scanFilter == null) {
             throw new IllegalAccessException("Scan filters must not be empty or null");
         }
-
-        assertWithMessage("mBluetoothLeScanner is null, please check if bluetooth is enabled")
-                .that(mBluetoothLeScanner)
-                .isNotNull();
-
         ScanSettings scanSettings = new ScanSettings.Builder()
                 .setCallbackType(ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
                 .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
@@ -723,9 +717,6 @@ public class ContextHubBleTestExecutor extends ContextHubChreApiTestExecutor {
      * Stops a BLE scan on the host side.
      */
     public void stopBleScanOnHost() {
-        assertWithMessage("mBluetoothLeScanner is null, please check if bluetooth is enabled")
-                .that(mBluetoothLeScanner)
-                .isNotNull();
         mBluetoothLeScanner.stopScan(mScanCallback);
     }
 
@@ -736,10 +727,6 @@ public class ContextHubBleTestExecutor extends ContextHubChreApiTestExecutor {
         if (mIsAdvertising.get()) {
             return;
         }
-
-        assertWithMessage("mBluetoothLeAdvertiser is null, please check if bluetooth is enabled")
-                .that(mBluetoothLeAdvertiser)
-                .isNotNull();
 
         AdvertisingSetParameters parameters = new AdvertisingSetParameters.Builder()
                 .setLegacyMode(true)
@@ -769,10 +756,6 @@ public class ContextHubBleTestExecutor extends ContextHubChreApiTestExecutor {
             return;
         }
 
-        assertWithMessage("mBluetoothLeAdvertiser is null, please check if bluetooth is enabled")
-                .that(mBluetoothLeAdvertiser)
-                .isNotNull();
-
         AdvertisingSetParameters parameters = new AdvertisingSetParameters.Builder()
                 .setLegacyMode(true)
                 .setConnectable(false)
@@ -800,10 +783,6 @@ public class ContextHubBleTestExecutor extends ContextHubChreApiTestExecutor {
         if (mIsAdvertising.get()) {
             return;
         }
-
-        assertWithMessage("mBluetoothLeAdvertiser is null, please check if bluetooth is enabled")
-                .that(mBluetoothLeAdvertiser)
-                .isNotNull();
 
         AdvertisingSetParameters parameters = new AdvertisingSetParameters.Builder()
                 .setLegacyMode(true)
@@ -833,10 +812,6 @@ public class ContextHubBleTestExecutor extends ContextHubChreApiTestExecutor {
             return;
         }
 
-        assertWithMessage("mBluetoothLeAdvertiser is null, please check if bluetooth is enabled")
-                .that(mBluetoothLeAdvertiser)
-                .isNotNull();
-
         AdvertisingSetParameters parameters = new AdvertisingSetParameters.Builder()
                 .setLegacyMode(true)
                 .setConnectable(false)
@@ -865,10 +840,6 @@ public class ContextHubBleTestExecutor extends ContextHubChreApiTestExecutor {
             return;
         }
 
-        assertWithMessage("mBluetoothLeAdvertiser is null, please check if bluetooth is enabled")
-                .that(mBluetoothLeAdvertiser)
-                .isNotNull();
-
         mBluetoothLeAdvertiser.stopAdvertisingSet(mAdvertisingSetCallback);
         mAdvertisingStopLatch.await();
         assertThat(mIsAdvertising.get()).isFalse();
@@ -890,9 +861,6 @@ public class ContextHubBleTestExecutor extends ContextHubChreApiTestExecutor {
     public String getMacAddress() throws Exception {
         if (mBluetoothAdapter == null) {
             Log.e(TAG, "getMacAddress mBluetoothAdapter is equal to null");
-            assertWithMessage("mBluetoothAdapter is null, please check if bluetooth is enabled")
-                    .that(mBluetoothAdapter)
-                    .isNotNull();
         }
 
         return mBluetoothAdapter.getAddress();

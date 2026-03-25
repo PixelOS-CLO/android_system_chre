@@ -27,7 +27,6 @@ import android.hardware.location.NanoAppBinary;
 import android.os.Build;
 import android.os.Bundle;
 import android.text.TextUtils;
-import android.util.Log;
 
 import androidx.test.InstrumentationRegistry;
 
@@ -57,8 +56,6 @@ public class ContextHubHostTestUtil {
             new String[]{"GtsGmscoreHostTestCases", "GtsLocationContextMultiDeviceTestCases"};
 
     public static String multiDeviceExternalNanoappPath = null;
-
-    private static final String TAG = "ContextHubHostTestUtil";
 
     /**
      * Returns the path to the directory containing the nanoapp binaries.
@@ -94,7 +91,6 @@ public class ContextHubHostTestUtil {
             Assert.assertTrue("None of the test nanoapps are available on the platform: " + path,
                     haveNanoApps);
         }
-        Log.i(TAG, "Using nanoapp binary from path: " + path);
         return path;
     }
 

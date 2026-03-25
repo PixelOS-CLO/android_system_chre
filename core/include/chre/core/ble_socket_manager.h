@@ -154,24 +154,14 @@ class BleSocketManager : public NonCopyable {
 
   /**
    * @see handlePlatformSocketPacket
-   *
-   * @param event The packet event to process.
-   * @param isSecondPass For internal use. Set to true if this is being called
-   *     from a deferred context to prevent infinite recursion.
    */
-  void handlePlatformSocketPacketSync(
-      UniquePtr<chreBleSocketPacketEvent> &&event, bool isSecondPass = false)
+  void handlePlatformSocketPacketSync(chreBleSocketPacketEvent *event)
       CHRE_REQUIRES(getMultiThreadingApiMutex());
 
   /**
    * @see handleSocketClosedByHost
-   *
-   * @param socketId The ID of the socket that was closed.
-   * @param isSecondPass For internal use. Set to true if this is being called
-   *     from a deferred context to prevent infinite recursion.
    */
-  void handleSocketClosedByHostSync(UniquePtr<uint64_t> &&socketId,
-                                    bool isSecondPass = false)
+  void handleSocketClosedByHostSync(uint64_t socketId)
       CHRE_REQUIRES(getMultiThreadingApiMutex());
 
   /**

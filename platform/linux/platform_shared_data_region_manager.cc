@@ -110,11 +110,4 @@ pw::Status PlatformSharedDataRegionManager::decrementRegionRefCount(
   return pw::OkStatus();
 }
 
-bool PlatformSharedDataRegionManager::sinkOnHubRequiresSeparateMetadataRegion(
-    message::MessageHubId hubId) {
-  return EventLoopManagerSingleton::get()
-      ->getHostMessageHubManager()
-      .isHostHub(hubId);
-}
-
 }  // namespace chre
