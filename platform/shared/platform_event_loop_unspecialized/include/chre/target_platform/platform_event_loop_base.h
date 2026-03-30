@@ -21,28 +21,10 @@
 
 namespace chre {
 
-/** Fake implementation of PlatformSharedDataRegionManagerBase for testing. */
-class PlatformSharedDataRegionManagerBase {
- public:
-  PlatformSharedDataRegionManagerBase() = default;
-  ~PlatformSharedDataRegionManagerBase() = default;
-
-  /** Visible for testing. */
-  size_t getNumCallsToDeallocateRegion() const {
-    return mNumCallsToDeallocateRegion;
-  }
-
-  /** Visible for testing. */
-  void resetNumCallsToDeallocateRegion() {
-    mNumCallsToDeallocateRegion = 0;
-  }
-
- protected:
-  //! The number of calls to deallocateRegion.
-  size_t mNumCallsToDeallocateRegion = 0;
-
-  //! The cookie to return for all async allocation requests.
-  uintptr_t mCookie = 0xDEADBEEF;
-};
+/**
+ * A shared base class for the PlatformEventLoop, which does the minimal amount
+ * of work required applicable to any PlatformEventLoop implementation.
+ */
+class PlatformEventLoopBase {};
 
 }  // namespace chre
