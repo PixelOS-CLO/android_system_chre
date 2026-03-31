@@ -48,109 +48,109 @@ class JniManager {
 
   struct WwanJniCache {
     // ContextHubAPNative class
-    jclass contextHubNativeClass;
-    jmethodID getCapabilitiesMethod;
-    jmethodID requestCellInfoMethod;
+    jclass contextHubNativeClass = nullptr;
+    jmethodID getCapabilitiesMethod = nullptr;
+    jmethodID requestCellInfoMethod = nullptr;
 
     // Classes
-    jclass cellInfoLteClass;
-    jclass cellInfoGsmClass;
-    jclass cellInfoWcdmaClass;
-    jclass cellInfoTdscdmaClass;
-    jclass cellInfoNrClass;
+    jclass cellInfoLteClass = nullptr;
+    jclass cellInfoGsmClass = nullptr;
+    jclass cellInfoWcdmaClass = nullptr;
+    jclass cellInfoTdscdmaClass = nullptr;
+    jclass cellInfoNrClass = nullptr;
 
     // Base CellInfo methods
-    jmethodID getTimeStamp;
-    jmethodID isRegistered;
+    jmethodID getTimeStamp = nullptr;
+    jmethodID isRegistered = nullptr;
 
     // --- LTE Methods ---
-    jmethodID lteGetIdentity;
-    jmethodID lteGetSignal;
+    jmethodID lteGetIdentity = nullptr;
+    jmethodID lteGetSignal = nullptr;
     // CellIdentityLte
-    jmethodID lteIdGetMcc;
-    jmethodID lteIdGetMnc;
-    jmethodID lteIdGetCi;
-    jmethodID lteIdGetPci;
-    jmethodID lteIdGetTac;
+    jmethodID lteIdGetMcc = nullptr;
+    jmethodID lteIdGetMnc = nullptr;
+    jmethodID lteIdGetCi = nullptr;
+    jmethodID lteIdGetPci = nullptr;
+    jmethodID lteIdGetTac = nullptr;
     // CellSignalStrengthLte
-    jmethodID lteSigGetDbm;
-    jmethodID lteSigGetRsrp;
-    jmethodID lteSigGetRsrq;
-    jmethodID lteSigGetRssnr;
-    jmethodID lteSigGetTa;
+    jmethodID lteSigGetDbm = nullptr;
+    jmethodID lteSigGetRsrp = nullptr;
+    jmethodID lteSigGetRsrq = nullptr;
+    jmethodID lteSigGetRssnr = nullptr;
+    jmethodID lteSigGetTa = nullptr;
 
     // --- GSM Methods ---
-    jmethodID gsmGetIdentity;
-    jmethodID gsmGetSignal;
+    jmethodID gsmGetIdentity = nullptr;
+    jmethodID gsmGetSignal = nullptr;
     // CellIdentityGsm
-    jmethodID gsmIdGetMcc;
-    jmethodID gsmIdGetMnc;
-    jmethodID gsmIdGetLac;
-    jmethodID gsmIdGetCid;
-    jmethodID gsmIdGetArfcn;
-    jmethodID gsmIdGetBsic;
+    jmethodID gsmIdGetMcc = nullptr;
+    jmethodID gsmIdGetMnc = nullptr;
+    jmethodID gsmIdGetLac = nullptr;
+    jmethodID gsmIdGetCid = nullptr;
+    jmethodID gsmIdGetArfcn = nullptr;
+    jmethodID gsmIdGetBsic = nullptr;
     // CellSignalStrengthGsm
-    jmethodID gsmSigGetDbm;
-    jmethodID gsmSigGetBitErrorRate;
+    jmethodID gsmSigGetDbm = nullptr;
+    jmethodID gsmSigGetBitErrorRate = nullptr;
 
     // --- WCDMA Methods ---
-    jmethodID wcdmaGetIdentity;
-    jmethodID wcdmaGetSignal;
+    jmethodID wcdmaGetIdentity = nullptr;
+    jmethodID wcdmaGetSignal = nullptr;
     // CellIdentityWcdma
-    jmethodID wcdmaIdGetMcc;
-    jmethodID wcdmaIdGetMnc;
-    jmethodID wcdmaIdGetLac;
-    jmethodID wcdmaIdGetCid;
-    jmethodID wcdmaIdGetPsc;
-    jmethodID wcdmaIdGetUarfcn;
+    jmethodID wcdmaIdGetMcc = nullptr;
+    jmethodID wcdmaIdGetMnc = nullptr;
+    jmethodID wcdmaIdGetLac = nullptr;
+    jmethodID wcdmaIdGetCid = nullptr;
+    jmethodID wcdmaIdGetPsc = nullptr;
+    jmethodID wcdmaIdGetUarfcn = nullptr;
     // CellSignalStrengthWcdma
-    jmethodID wcdmaSigGetDbm;
+    jmethodID wcdmaSigGetDbm = nullptr;
 
     // --- NR (5G) Methods ---
-    jmethodID nrGetIdentity;
-    jmethodID nrGetSignal;
+    jmethodID nrGetIdentity = nullptr;
+    jmethodID nrGetSignal = nullptr;
     // CellIdentityNr
-    jmethodID nrIdGetMcc;
-    jmethodID nrIdGetMnc;
-    jmethodID nrIdGetNci;
-    jmethodID nrIdGetPci;
-    jmethodID nrIdGetTac;
-    jmethodID nrIdGetNrarfcn;
+    jmethodID nrIdGetMcc = nullptr;
+    jmethodID nrIdGetMnc = nullptr;
+    jmethodID nrIdGetNci = nullptr;
+    jmethodID nrIdGetPci = nullptr;
+    jmethodID nrIdGetTac = nullptr;
+    jmethodID nrIdGetNrarfcn = nullptr;
     // CellSignalStrengthNr
-    jmethodID nrSigGetDbm;
-    jmethodID nrSigGetCsiRsrp;
-    jmethodID nrSigGetCsiRsrq;
-    jmethodID nrSigGetCsiSinr;
-    jmethodID nrSigGetSsRsrp;
-    jmethodID nrSigGetSsRsrq;
-    jmethodID nrSigGetSsSinr;
+    jmethodID nrSigGetDbm = nullptr;
+    jmethodID nrSigGetCsiRsrp = nullptr;
+    jmethodID nrSigGetCsiRsrq = nullptr;
+    jmethodID nrSigGetCsiSinr = nullptr;
+    jmethodID nrSigGetSsRsrp = nullptr;
+    jmethodID nrSigGetSsRsrq = nullptr;
+    jmethodID nrSigGetSsSinr = nullptr;
 
     // --- CDMA Methods ---
-    jclass cellInfoCdmaClass;
-    jmethodID cdmaGetIdentity;
-    jmethodID cdmaGetSignal;
+    jclass cellInfoCdmaClass = nullptr;
+    jmethodID cdmaGetIdentity = nullptr;
+    jmethodID cdmaGetSignal = nullptr;
     // CellIdentityCdma
-    jmethodID cdmaIdGetNetworkId;
-    jmethodID cdmaIdGetSystemId;
-    jmethodID cdmaIdGetBasestationId;
-    jmethodID cdmaIdGetLongitude;
-    jmethodID cdmaIdGetLatitude;
+    jmethodID cdmaIdGetNetworkId = nullptr;
+    jmethodID cdmaIdGetSystemId = nullptr;
+    jmethodID cdmaIdGetBasestationId = nullptr;
+    jmethodID cdmaIdGetLongitude = nullptr;
+    jmethodID cdmaIdGetLatitude = nullptr;
     // CellSignalStrengthCdma
-    jmethodID cdmaSigGetCdmaDbm;
-    jmethodID cdmaSigGetCdmaEcio;
+    jmethodID cdmaSigGetCdmaDbm = nullptr;
+    jmethodID cdmaSigGetCdmaEcio = nullptr;
 
     // --- TD-SCDMA Methods ---
-    jmethodID tdscdmaGetIdentity;
-    jmethodID tdscdmaGetSignal;
+    jmethodID tdscdmaGetIdentity = nullptr;
+    jmethodID tdscdmaGetSignal = nullptr;
     // CellIdentityTdscdma
-    jmethodID tdscdmaIdGetMcc;
-    jmethodID tdscdmaIdGetMnc;
-    jmethodID tdscdmaIdGetLac;
-    jmethodID tdscdmaIdGetCid;
-    jmethodID tdscdmaIdGetCpid;
-    jmethodID tdscdmaSigGetDbm;
+    jmethodID tdscdmaIdGetMcc = nullptr;
+    jmethodID tdscdmaIdGetMnc = nullptr;
+    jmethodID tdscdmaIdGetLac = nullptr;
+    jmethodID tdscdmaIdGetCid = nullptr;
+    jmethodID tdscdmaIdGetCpid = nullptr;
+    jmethodID tdscdmaSigGetDbm = nullptr;
     // CellSignalStrengthTdscdma
-    jmethodID tdscdmaSigGetRscp;
+    jmethodID tdscdmaSigGetRscp = nullptr;
   };
   WwanJniCache mWwanJniCache;
 

@@ -62,13 +62,21 @@ static int32_t parseStringToInt(JNIEnv *env, jstring str) {
 // Common Fields Populator
 static void populateCommonFields(JNIEnv *env, jobject cellInfoObj,
                                  chreWwanCellInfo *outInfo) {
-  outInfo->timeStamp =
-      env->CallLongMethod(cellInfoObj, getWwanJniCache().getTimeStamp);
+  if (getWwanJniCache().getTimeStamp != nullptr) {
+    outInfo->timeStamp =
+        env->CallLongMethod(cellInfoObj, getWwanJniCache().getTimeStamp);
+  } else {
+    outInfo->timeStamp = 0;
+  }
   outInfo->timeStampType = CHRE_WWAN_CELL_TIMESTAMP_TYPE_MODEM;
 
-  jboolean registered =
-      env->CallBooleanMethod(cellInfoObj, getWwanJniCache().isRegistered);
-  outInfo->registered = (registered == JNI_TRUE) ? 1 : 0;
+  if (getWwanJniCache().isRegistered != nullptr) {
+    jboolean registered =
+        env->CallBooleanMethod(cellInfoObj, getWwanJniCache().isRegistered);
+    outInfo->registered = (registered == JNI_TRUE) ? 1 : 0;
+  } else {
+    outInfo->registered = 0;
+  }
 
   outInfo->reserved = 0;
 }
@@ -79,36 +87,65 @@ static void parseGsmInfo(JNIEnv *env, jobject cellInfo,
   outInfo->cellInfoType = CHRE_WWAN_CELL_INFO_TYPE_GSM;
 
   jobject id =
-      env->CallObjectMethod(cellInfo, getWwanJniCache().gsmGetIdentity);
-  jobject sig = env->CallObjectMethod(cellInfo, getWwanJniCache().gsmGetSignal);
-
+      (getWwanJniCache().gsmGetIdentity != nullptr)
+          ? env->CallObjectMethod(cellInfo, getWwanJniCache().gsmGetIdentity)
+          : nullptr;
   if (id) {
     outInfo->CellInfo.gsm.cellIdentityGsm.mcc =
-        env->CallIntMethod(id, getWwanJniCache().gsmIdGetMcc);
+        (getWwanJniCache().gsmIdGetMcc != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().gsmIdGetMcc)
+            : INT32_MAX;
     outInfo->CellInfo.gsm.cellIdentityGsm.mnc =
-        env->CallIntMethod(id, getWwanJniCache().gsmIdGetMnc);
+        (getWwanJniCache().gsmIdGetMnc != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().gsmIdGetMnc)
+            : INT32_MAX;
     outInfo->CellInfo.gsm.cellIdentityGsm.lac =
-        env->CallIntMethod(id, getWwanJniCache().gsmIdGetLac);
+        (getWwanJniCache().gsmIdGetLac != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().gsmIdGetLac)
+            : INT32_MAX;
     outInfo->CellInfo.gsm.cellIdentityGsm.cid =
-        env->CallIntMethod(id, getWwanJniCache().gsmIdGetCid);
+        (getWwanJniCache().gsmIdGetCid != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().gsmIdGetCid)
+            : INT32_MAX;
     outInfo->CellInfo.gsm.cellIdentityGsm.arfcn =
-        env->CallIntMethod(id, getWwanJniCache().gsmIdGetArfcn);
+        (getWwanJniCache().gsmIdGetArfcn != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().gsmIdGetArfcn)
+            : INT32_MAX;
     outInfo->CellInfo.gsm.cellIdentityGsm.bsic =
-        env->CallIntMethod(id, getWwanJniCache().gsmIdGetBsic);
+        (getWwanJniCache().gsmIdGetBsic != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().gsmIdGetBsic)
+            : UINT8_MAX;
     env->DeleteLocalRef(id);
   } else {
     // Fill with invalid/defaults if identity is missing
     outInfo->CellInfo.gsm.cellIdentityGsm.mcc = INT32_MAX;
+    outInfo->CellInfo.gsm.cellIdentityGsm.mnc = INT32_MAX;
+    outInfo->CellInfo.gsm.cellIdentityGsm.lac = INT32_MAX;
+    outInfo->CellInfo.gsm.cellIdentityGsm.cid = INT32_MAX;
+    outInfo->CellInfo.gsm.cellIdentityGsm.arfcn = INT32_MAX;
+    outInfo->CellInfo.gsm.cellIdentityGsm.bsic = UINT8_MAX;
   }
 
+  jobject sig =
+      (getWwanJniCache().gsmGetSignal != nullptr)
+          ? env->CallObjectMethod(cellInfo, getWwanJniCache().gsmGetSignal)
+          : nullptr;
   if (sig) {
     outInfo->CellInfo.gsm.signalStrengthGsm.signalStrength =
-        env->CallIntMethod(sig, getWwanJniCache().gsmSigGetDbm);
+        (getWwanJniCache().gsmSigGetDbm != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().gsmSigGetDbm)
+            : INT32_MAX;
     outInfo->CellInfo.gsm.signalStrengthGsm.bitErrorRate =
-        env->CallIntMethod(sig, getWwanJniCache().gsmSigGetBitErrorRate);
+        (getWwanJniCache().gsmSigGetBitErrorRate != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().gsmSigGetBitErrorRate)
+            : INT32_MAX;
     // GSM Timing Advance often not available in standard API
     outInfo->CellInfo.gsm.signalStrengthGsm.timingAdvance = INT32_MAX;
     env->DeleteLocalRef(sig);
+  } else {
+    outInfo->CellInfo.gsm.signalStrengthGsm.signalStrength = INT32_MAX;
+    outInfo->CellInfo.gsm.signalStrengthGsm.bitErrorRate = INT32_MAX;
+    outInfo->CellInfo.gsm.signalStrengthGsm.timingAdvance = INT32_MAX;
   }
 }
 
@@ -118,40 +155,76 @@ static void parseLteInfo(JNIEnv *env, jobject cellInfo,
   outInfo->cellInfoType = CHRE_WWAN_CELL_INFO_TYPE_LTE;
 
   jobject id =
-      env->CallObjectMethod(cellInfo, getWwanJniCache().lteGetIdentity);
-  jobject sig = env->CallObjectMethod(cellInfo, getWwanJniCache().lteGetSignal);
-
+      (getWwanJniCache().lteGetIdentity != nullptr)
+          ? env->CallObjectMethod(cellInfo, getWwanJniCache().lteGetIdentity)
+          : nullptr;
   if (id) {
     outInfo->CellInfo.lte.cellIdentityLte.mcc =
-        env->CallIntMethod(id, getWwanJniCache().lteIdGetMcc);
+        (getWwanJniCache().lteIdGetMcc != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().lteIdGetMcc)
+            : INT32_MAX;
     outInfo->CellInfo.lte.cellIdentityLte.mnc =
-        env->CallIntMethod(id, getWwanJniCache().lteIdGetMnc);
+        (getWwanJniCache().lteIdGetMnc != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().lteIdGetMnc)
+            : INT32_MAX;
     outInfo->CellInfo.lte.cellIdentityLte.ci =
-        env->CallIntMethod(id, getWwanJniCache().lteIdGetCi);
+        (getWwanJniCache().lteIdGetCi != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().lteIdGetCi)
+            : INT32_MAX;
     outInfo->CellInfo.lte.cellIdentityLte.pci =
-        env->CallIntMethod(id, getWwanJniCache().lteIdGetPci);
+        (getWwanJniCache().lteIdGetPci != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().lteIdGetPci)
+            : INT32_MAX;
     outInfo->CellInfo.lte.cellIdentityLte.tac =
-        env->CallIntMethod(id, getWwanJniCache().lteIdGetTac);
+        (getWwanJniCache().lteIdGetTac != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().lteIdGetTac)
+            : INT32_MAX;
     outInfo->CellInfo.lte.cellIdentityLte.earfcn = INT32_MAX;
     env->DeleteLocalRef(id);
   } else {
     outInfo->CellInfo.lte.cellIdentityLte.mcc = INT32_MAX;
+    outInfo->CellInfo.lte.cellIdentityLte.mnc = INT32_MAX;
+    outInfo->CellInfo.lte.cellIdentityLte.ci = INT32_MAX;
+    outInfo->CellInfo.lte.cellIdentityLte.pci = INT32_MAX;
+    outInfo->CellInfo.lte.cellIdentityLte.tac = INT32_MAX;
+    outInfo->CellInfo.lte.cellIdentityLte.earfcn = INT32_MAX;
   }
 
+  jobject sig =
+      (getWwanJniCache().lteGetSignal != nullptr)
+          ? env->CallObjectMethod(cellInfo, getWwanJniCache().lteGetSignal)
+          : nullptr;
   if (sig) {
     outInfo->CellInfo.lte.signalStrengthLte.signalStrength =
-        env->CallIntMethod(sig, getWwanJniCache().lteSigGetDbm);
+        (getWwanJniCache().lteSigGetDbm != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().lteSigGetDbm)
+            : INT32_MAX;
     outInfo->CellInfo.lte.signalStrengthLte.rsrp =
-        env->CallIntMethod(sig, getWwanJniCache().lteSigGetRsrp);
+        (getWwanJniCache().lteSigGetRsrp != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().lteSigGetRsrp)
+            : INT32_MAX;
     outInfo->CellInfo.lte.signalStrengthLte.rsrq =
-        env->CallIntMethod(sig, getWwanJniCache().lteSigGetRsrq);
+        (getWwanJniCache().lteSigGetRsrq != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().lteSigGetRsrq)
+            : INT32_MAX;
     outInfo->CellInfo.lte.signalStrengthLte.rssnr =
-        env->CallIntMethod(sig, getWwanJniCache().lteSigGetRssnr);
+        (getWwanJniCache().lteSigGetRssnr != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().lteSigGetRssnr)
+            : INT32_MAX;
     outInfo->CellInfo.lte.signalStrengthLte.timingAdvance =
-        env->CallIntMethod(sig, getWwanJniCache().lteSigGetTa);
+        (getWwanJniCache().lteSigGetTa != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().lteSigGetTa)
+            : INT32_MAX;
     outInfo->CellInfo.lte.signalStrengthLte.cqi =
         INT32_MAX;  // Typically not available in cache
     env->DeleteLocalRef(sig);
+  } else {
+    outInfo->CellInfo.lte.signalStrengthLte.signalStrength = INT32_MAX;
+    outInfo->CellInfo.lte.signalStrengthLte.rsrp = INT32_MAX;
+    outInfo->CellInfo.lte.signalStrengthLte.rsrq = INT32_MAX;
+    outInfo->CellInfo.lte.signalStrengthLte.rssnr = INT32_MAX;
+    outInfo->CellInfo.lte.signalStrengthLte.timingAdvance = INT32_MAX;
+    outInfo->CellInfo.lte.signalStrengthLte.cqi = INT32_MAX;
   }
 }
 
@@ -161,32 +234,59 @@ static void parseWcdmaInfo(JNIEnv *env, jobject cellInfo,
   outInfo->cellInfoType = CHRE_WWAN_CELL_INFO_TYPE_WCDMA;
 
   jobject id =
-      env->CallObjectMethod(cellInfo, getWwanJniCache().wcdmaGetIdentity);
-  jobject sig =
-      env->CallObjectMethod(cellInfo, getWwanJniCache().wcdmaGetSignal);
-
+      (getWwanJniCache().wcdmaGetIdentity != nullptr)
+          ? env->CallObjectMethod(cellInfo, getWwanJniCache().wcdmaGetIdentity)
+          : nullptr;
   if (id) {
     outInfo->CellInfo.wcdma.cellIdentityWcdma.mcc =
-        env->CallIntMethod(id, getWwanJniCache().wcdmaIdGetMcc);
+        (getWwanJniCache().wcdmaIdGetMcc != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().wcdmaIdGetMcc)
+            : INT32_MAX;
     outInfo->CellInfo.wcdma.cellIdentityWcdma.mnc =
-        env->CallIntMethod(id, getWwanJniCache().wcdmaIdGetMnc);
+        (getWwanJniCache().wcdmaIdGetMnc != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().wcdmaIdGetMnc)
+            : INT32_MAX;
     outInfo->CellInfo.wcdma.cellIdentityWcdma.lac =
-        env->CallIntMethod(id, getWwanJniCache().wcdmaIdGetLac);
+        (getWwanJniCache().wcdmaIdGetLac != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().wcdmaIdGetLac)
+            : INT32_MAX;
     outInfo->CellInfo.wcdma.cellIdentityWcdma.cid =
-        env->CallIntMethod(id, getWwanJniCache().wcdmaIdGetCid);
+        (getWwanJniCache().wcdmaIdGetCid != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().wcdmaIdGetCid)
+            : INT32_MAX;
     outInfo->CellInfo.wcdma.cellIdentityWcdma.psc =
-        env->CallIntMethod(id, getWwanJniCache().wcdmaIdGetPsc);
+        (getWwanJniCache().wcdmaIdGetPsc != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().wcdmaIdGetPsc)
+            : INT32_MAX;
     outInfo->CellInfo.wcdma.cellIdentityWcdma.uarfcn =
-        env->CallIntMethod(id, getWwanJniCache().wcdmaIdGetUarfcn);
+        (getWwanJniCache().wcdmaIdGetUarfcn != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().wcdmaIdGetUarfcn)
+            : INT32_MAX;
     env->DeleteLocalRef(id);
+  } else {
+    outInfo->CellInfo.wcdma.cellIdentityWcdma.mcc = INT32_MAX;
+    outInfo->CellInfo.wcdma.cellIdentityWcdma.mnc = INT32_MAX;
+    outInfo->CellInfo.wcdma.cellIdentityWcdma.lac = INT32_MAX;
+    outInfo->CellInfo.wcdma.cellIdentityWcdma.cid = INT32_MAX;
+    outInfo->CellInfo.wcdma.cellIdentityWcdma.psc = INT32_MAX;
+    outInfo->CellInfo.wcdma.cellIdentityWcdma.uarfcn = INT32_MAX;
   }
 
+  jobject sig =
+      (getWwanJniCache().wcdmaGetSignal != nullptr)
+          ? env->CallObjectMethod(cellInfo, getWwanJniCache().wcdmaGetSignal)
+          : nullptr;
   if (sig) {
     outInfo->CellInfo.wcdma.signalStrengthWcdma.signalStrength =
-        env->CallIntMethod(sig, getWwanJniCache().wcdmaSigGetDbm);
+        (getWwanJniCache().wcdmaSigGetDbm != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().wcdmaSigGetDbm)
+            : INT32_MAX;
     // WCDMA getBitErrorRate is not available in standard API
     outInfo->CellInfo.wcdma.signalStrengthWcdma.bitErrorRate = INT32_MAX;
     env->DeleteLocalRef(sig);
+  } else {
+    outInfo->CellInfo.wcdma.signalStrengthWcdma.signalStrength = INT32_MAX;
+    outInfo->CellInfo.wcdma.signalStrengthWcdma.bitErrorRate = INT32_MAX;
   }
 }
 
@@ -197,38 +297,71 @@ static void parseNrInfo(JNIEnv *env, jobject cellInfo,
 
   if (!getWwanJniCache().cellInfoNrClass) return;  // Safety check
 
-  jobject id = env->CallObjectMethod(cellInfo, getWwanJniCache().nrGetIdentity);
-  jobject sig = env->CallObjectMethod(cellInfo, getWwanJniCache().nrGetSignal);
-
+  jobject id =
+      (getWwanJniCache().nrGetIdentity != nullptr)
+          ? env->CallObjectMethod(cellInfo, getWwanJniCache().nrGetIdentity)
+          : nullptr;
   if (id) {
     jstring mccStr =
-        (jstring)env->CallObjectMethod(id, getWwanJniCache().nrIdGetMcc);
+        (getWwanJniCache().nrIdGetMcc != nullptr)
+            ? (jstring)env->CallObjectMethod(id, getWwanJniCache().nrIdGetMcc)
+            : nullptr;
     jstring mncStr =
-        (jstring)env->CallObjectMethod(id, getWwanJniCache().nrIdGetMnc);
+        (getWwanJniCache().nrIdGetMnc != nullptr)
+            ? (jstring)env->CallObjectMethod(id, getWwanJniCache().nrIdGetMnc)
+            : nullptr;
 
     outInfo->CellInfo.nr.cellIdentityNr.mcc = parseStringToInt(env, mccStr);
     outInfo->CellInfo.nr.cellIdentityNr.mnc = parseStringToInt(env, mncStr);
-    env->DeleteLocalRef(mccStr);
-    env->DeleteLocalRef(mncStr);
-    chreWwanPackNrNci(env->CallLongMethod(id, getWwanJniCache().nrIdGetNci),
-                      &(outInfo->CellInfo.nr.cellIdentityNr));
+    if (mccStr) env->DeleteLocalRef(mccStr);
+    if (mncStr) env->DeleteLocalRef(mncStr);
+
+    if (getWwanJniCache().nrIdGetNci != nullptr) {
+      chreWwanPackNrNci(env->CallLongMethod(id, getWwanJniCache().nrIdGetNci),
+                        &(outInfo->CellInfo.nr.cellIdentityNr));
+    } else {
+      chreWwanPackNrNci(INT64_MAX, &(outInfo->CellInfo.nr.cellIdentityNr));
+    }
+
     outInfo->CellInfo.nr.cellIdentityNr.pci =
-        env->CallIntMethod(id, getWwanJniCache().nrIdGetPci);
+        (getWwanJniCache().nrIdGetPci != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().nrIdGetPci)
+            : INT32_MAX;
     outInfo->CellInfo.nr.cellIdentityNr.tac =
-        env->CallIntMethod(id, getWwanJniCache().nrIdGetTac);
+        (getWwanJniCache().nrIdGetTac != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().nrIdGetTac)
+            : INT32_MAX;
     outInfo->CellInfo.nr.cellIdentityNr.nrarfcn =
-        env->CallIntMethod(id, getWwanJniCache().nrIdGetNrarfcn);
+        (getWwanJniCache().nrIdGetNrarfcn != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().nrIdGetNrarfcn)
+            : INT32_MAX;
 
     env->DeleteLocalRef(id);
+  } else {
+    outInfo->CellInfo.nr.cellIdentityNr.mcc = INT32_MAX;
+    outInfo->CellInfo.nr.cellIdentityNr.mnc = INT32_MAX;
+    outInfo->CellInfo.nr.cellIdentityNr.pci = INT32_MAX;
+    outInfo->CellInfo.nr.cellIdentityNr.tac = INT32_MAX;
+    outInfo->CellInfo.nr.cellIdentityNr.nrarfcn = INT32_MAX;
   }
 
+  jobject sig =
+      (getWwanJniCache().nrGetSignal != nullptr)
+          ? env->CallObjectMethod(cellInfo, getWwanJniCache().nrGetSignal)
+          : nullptr;
   if (sig) {
     outInfo->CellInfo.nr.signalStrengthNr.ssRsrp =
-        env->CallIntMethod(sig, getWwanJniCache().nrSigGetSsRsrp);
+        (getWwanJniCache().nrSigGetSsRsrp != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().nrSigGetSsRsrp)
+            : INT32_MAX;
     outInfo->CellInfo.nr.signalStrengthNr.ssRsrq =
-        env->CallIntMethod(sig, getWwanJniCache().nrSigGetSsRsrq);
+        (getWwanJniCache().nrSigGetSsRsrq != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().nrSigGetSsRsrq)
+            : INT32_MAX;
     outInfo->CellInfo.nr.signalStrengthNr.ssSinr =
-        env->CallIntMethod(sig, getWwanJniCache().nrSigGetSsSinr);
+        (getWwanJniCache().nrSigGetSsSinr != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().nrSigGetSsSinr)
+            : INT32_MAX;
     // CSI is often optional or not available in basic CellSignalStrengthNr,
     // depends on method availability
     outInfo->CellInfo.nr.signalStrengthNr.csiRsrp = INT32_MAX;
@@ -236,6 +369,13 @@ static void parseNrInfo(JNIEnv *env, jobject cellInfo,
     outInfo->CellInfo.nr.signalStrengthNr.csiSinr = INT32_MAX;
 
     env->DeleteLocalRef(sig);
+  } else {
+    outInfo->CellInfo.nr.signalStrengthNr.ssRsrp = INT32_MAX;
+    outInfo->CellInfo.nr.signalStrengthNr.ssRsrq = INT32_MAX;
+    outInfo->CellInfo.nr.signalStrengthNr.ssSinr = INT32_MAX;
+    outInfo->CellInfo.nr.signalStrengthNr.csiRsrp = INT32_MAX;
+    outInfo->CellInfo.nr.signalStrengthNr.csiRsrq = INT32_MAX;
+    outInfo->CellInfo.nr.signalStrengthNr.csiSinr = INT32_MAX;
   }
 }
 
@@ -245,32 +385,56 @@ static void parseCdmaInfo(JNIEnv *env, jobject cellInfo,
   outInfo->cellInfoType = CHRE_WWAN_CELL_INFO_TYPE_CDMA;
 
   jobject id =
-      env->CallObjectMethod(cellInfo, getWwanJniCache().cdmaGetIdentity);
-  jobject sig =
-      env->CallObjectMethod(cellInfo, getWwanJniCache().cdmaGetSignal);
-
+      (getWwanJniCache().cdmaGetIdentity != nullptr)
+          ? env->CallObjectMethod(cellInfo, getWwanJniCache().cdmaGetIdentity)
+          : nullptr;
   if (id) {
     outInfo->CellInfo.cdma.cellIdentityCdma.networkId =
-        env->CallIntMethod(id, getWwanJniCache().cdmaIdGetNetworkId);
+        (getWwanJniCache().cdmaIdGetNetworkId != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().cdmaIdGetNetworkId)
+            : INT32_MAX;
     outInfo->CellInfo.cdma.cellIdentityCdma.systemId =
-        env->CallIntMethod(id, getWwanJniCache().cdmaIdGetSystemId);
+        (getWwanJniCache().cdmaIdGetSystemId != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().cdmaIdGetSystemId)
+            : INT32_MAX;
     outInfo->CellInfo.cdma.cellIdentityCdma.basestationId =
-        env->CallIntMethod(id, getWwanJniCache().cdmaIdGetBasestationId);
+        (getWwanJniCache().cdmaIdGetBasestationId != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().cdmaIdGetBasestationId)
+            : INT32_MAX;
     outInfo->CellInfo.cdma.cellIdentityCdma.longitude =
-        env->CallIntMethod(id, getWwanJniCache().cdmaIdGetLongitude);
+        (getWwanJniCache().cdmaIdGetLongitude != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().cdmaIdGetLongitude)
+            : INT32_MAX;
     outInfo->CellInfo.cdma.cellIdentityCdma.latitude =
-        env->CallIntMethod(id, getWwanJniCache().cdmaIdGetLatitude);
+        (getWwanJniCache().cdmaIdGetLatitude != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().cdmaIdGetLatitude)
+            : INT32_MAX;
     env->DeleteLocalRef(id);
   } else {
     outInfo->CellInfo.cdma.cellIdentityCdma.networkId = INT32_MAX;
+    outInfo->CellInfo.cdma.cellIdentityCdma.systemId = INT32_MAX;
+    outInfo->CellInfo.cdma.cellIdentityCdma.basestationId = INT32_MAX;
+    outInfo->CellInfo.cdma.cellIdentityCdma.longitude = INT32_MAX;
+    outInfo->CellInfo.cdma.cellIdentityCdma.latitude = INT32_MAX;
   }
 
+  jobject sig =
+      (getWwanJniCache().cdmaGetSignal != nullptr)
+          ? env->CallObjectMethod(cellInfo, getWwanJniCache().cdmaGetSignal)
+          : nullptr;
   if (sig) {
     outInfo->CellInfo.cdma.signalStrengthCdma.dbm =
-        env->CallIntMethod(sig, getWwanJniCache().cdmaSigGetCdmaDbm);
+        (getWwanJniCache().cdmaSigGetCdmaDbm != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().cdmaSigGetCdmaDbm)
+            : INT32_MAX;
     outInfo->CellInfo.cdma.signalStrengthCdma.ecio =
-        env->CallIntMethod(sig, getWwanJniCache().cdmaSigGetCdmaEcio);
+        (getWwanJniCache().cdmaSigGetCdmaEcio != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().cdmaSigGetCdmaEcio)
+            : INT32_MAX;
     env->DeleteLocalRef(sig);
+  } else {
+    outInfo->CellInfo.cdma.signalStrengthCdma.dbm = INT32_MAX;
+    outInfo->CellInfo.cdma.signalStrengthCdma.ecio = INT32_MAX;
   }
 }
 
@@ -279,38 +443,59 @@ static void parseTdscdmaInfo(JNIEnv *env, jobject cellInfo,
                              chreWwanCellInfo *outInfo) {
   outInfo->cellInfoType = CHRE_WWAN_CELL_INFO_TYPE_TD_SCDMA;
 
-  jobject id =
-      env->CallObjectMethod(cellInfo, getWwanJniCache().tdscdmaGetIdentity);
-  jobject sig =
-      env->CallObjectMethod(cellInfo, getWwanJniCache().tdscdmaGetSignal);
-
+  jobject id = (getWwanJniCache().tdscdmaGetIdentity != nullptr)
+                   ? env->CallObjectMethod(cellInfo,
+                                           getWwanJniCache().tdscdmaGetIdentity)
+                   : nullptr;
   if (id) {
-    jstring mccStr =
-        (jstring)env->CallObjectMethod(id, getWwanJniCache().tdscdmaIdGetMcc);
-    jstring mncStr =
-        (jstring)env->CallObjectMethod(id, getWwanJniCache().tdscdmaIdGetMnc);
+    jstring mccStr = (getWwanJniCache().tdscdmaIdGetMcc != nullptr)
+                         ? (jstring)env->CallObjectMethod(
+                               id, getWwanJniCache().tdscdmaIdGetMcc)
+                         : nullptr;
+    jstring mncStr = (getWwanJniCache().tdscdmaIdGetMnc != nullptr)
+                         ? (jstring)env->CallObjectMethod(
+                               id, getWwanJniCache().tdscdmaIdGetMnc)
+                         : nullptr;
     outInfo->CellInfo.tdscdma.cellIdentityTdscdma.mcc =
         parseStringToInt(env, mccStr);
     outInfo->CellInfo.tdscdma.cellIdentityTdscdma.mnc =
         parseStringToInt(env, mncStr);
-    env->DeleteLocalRef(mccStr);
-    env->DeleteLocalRef(mncStr);
+    if (mccStr) env->DeleteLocalRef(mccStr);
+    if (mncStr) env->DeleteLocalRef(mncStr);
 
     outInfo->CellInfo.tdscdma.cellIdentityTdscdma.lac =
-        env->CallIntMethod(id, getWwanJniCache().tdscdmaIdGetLac);
+        (getWwanJniCache().tdscdmaIdGetLac != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().tdscdmaIdGetLac)
+            : INT32_MAX;
     outInfo->CellInfo.tdscdma.cellIdentityTdscdma.cid =
-        env->CallIntMethod(id, getWwanJniCache().tdscdmaIdGetCid);
+        (getWwanJniCache().tdscdmaIdGetCid != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().tdscdmaIdGetCid)
+            : INT32_MAX;
     outInfo->CellInfo.tdscdma.cellIdentityTdscdma.cpid =
-        env->CallIntMethod(id, getWwanJniCache().tdscdmaIdGetCpid);
+        (getWwanJniCache().tdscdmaIdGetCpid != nullptr)
+            ? env->CallIntMethod(id, getWwanJniCache().tdscdmaIdGetCpid)
+            : INT32_MAX;
     env->DeleteLocalRef(id);
   } else {
     outInfo->CellInfo.tdscdma.cellIdentityTdscdma.mcc = INT32_MAX;
+    outInfo->CellInfo.tdscdma.cellIdentityTdscdma.mnc = INT32_MAX;
+    outInfo->CellInfo.tdscdma.cellIdentityTdscdma.lac = INT32_MAX;
+    outInfo->CellInfo.tdscdma.cellIdentityTdscdma.cid = INT32_MAX;
+    outInfo->CellInfo.tdscdma.cellIdentityTdscdma.cpid = INT32_MAX;
   }
 
+  jobject sig =
+      (getWwanJniCache().tdscdmaGetSignal != nullptr)
+          ? env->CallObjectMethod(cellInfo, getWwanJniCache().tdscdmaGetSignal)
+          : nullptr;
   if (sig) {
     outInfo->CellInfo.tdscdma.signalStrengthTdscdma.rscp =
-        env->CallIntMethod(sig, getWwanJniCache().tdscdmaSigGetDbm);
+        (getWwanJniCache().tdscdmaSigGetDbm != nullptr)
+            ? env->CallIntMethod(sig, getWwanJniCache().tdscdmaSigGetDbm)
+            : INT32_MAX;
     env->DeleteLocalRef(sig);
+  } else {
+    outInfo->CellInfo.tdscdma.signalStrengthTdscdma.rscp = INT32_MAX;
   }
 }
 }  // namespace
