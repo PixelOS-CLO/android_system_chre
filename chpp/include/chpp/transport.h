@@ -62,6 +62,14 @@ extern "C" {
 #endif
 
 /**
+ * CHPP Transport layer maximum number of unexpected reset-ack packets received,
+ * after which a new reset is attempted.
+ */
+#ifndef CHPP_TRANSPORT_MAX_UNEXPECTED_RESET_ACK
+#define CHPP_TRANSPORT_MAX_UNEXPECTED_RESET_ACK UINT16_C(3)
+#endif
+
+/**
  * CHPP Transport layer reset timeout in ns. The transport layer will attempt
  * another reset if the previous reset is not acked in time.
  */
@@ -411,12 +419,13 @@ struct ChppTransportState {
   struct ChppDatagram transportLoopbackData;   // Transport-layer loopback
                                                // request data, if any
 
-  struct ChppMutex mutex;          // Lock for transport state (i.e. context)
-  struct ChppNotifier notifier;    // Notifier for main thread
-  bool initialized;                // Has been initialized
-  enum ChppResetState resetState;  // Maintains state of a reset
-  uint16_t resetCount;             // (Unsuccessful) reset attempts
-  uint64_t resetTimeNs;            // Time of last reset
+  struct ChppMutex mutex;            // Lock for transport state (i.e. context)
+  struct ChppNotifier notifier;      // Notifier for main thread
+  bool initialized;                  // Has been initialized
+  enum ChppResetState resetState;    // Maintains state of a reset
+  uint16_t resetCount;               // (Unsuccessful) reset attempts
+  uint64_t resetTimeNs;              // Time of last reset
+  uint16_t unexpectedResetAckCount;  // For detecting reset race conditions
 
   struct ChppConditionVariable
       resetCondVar;  // Condvar specifically to wait for resetState

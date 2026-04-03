@@ -194,7 +194,9 @@ void HostCommsManager::onMessageToHostComplete(const MessageToHost *message) {
 }
 
 void HostCommsManager::resetBlameForNanoappHostWakeup() {
-  mIsNanoappBlamedForWakeup = false;
+  EventLoopManagerSingleton::get()
+      ->getWakeupStatsManager()
+      .resetBlameForHostWakeup();
 }
 
 bool HostCommsManager::sendMessageToHostFromNanoapp(
@@ -401,9 +403,11 @@ void HostCommsManager::deliverNanoappMessageFromHost(
 
 bool HostCommsManager::doSendMessageToHostFromNanoapp(
     Nanoapp *nanoapp, MessageToHost *msgToHost) {
-  bool hostWasAwake =
-      EventLoopManagerSingleton::get()->getPowerControlManager().hostIsAwake();
-  bool wokeHost = !hostWasAwake && !mIsNanoappBlamedForWakeup;
+  CHRE_ASSERT(nanoapp != nullptr);
+
+  bool wokeHost = EventLoopManagerSingleton::get()
+                      ->getWakeupStatsManager()
+                      .willWakeupHost();
   msgToHost->toHostData.wokeHost = wokeHost;
 
   {
@@ -416,8 +420,8 @@ bool HostCommsManager::doSendMessageToHostFromNanoapp(
   }
 
   if (wokeHost) {
-    mIsNanoappBlamedForWakeup = true;
-    nanoapp->blameHostWakeup();
+    EventLoopManagerSingleton::get()->getWakeupStatsManager().blameWakeup(
+        nanoapp, WakeupReason::NANOAPP_MESSAGE);
   }
   nanoapp->blameHostMessageSent();
   return true;

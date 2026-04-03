@@ -20,6 +20,8 @@
 #include <cinttypes>
 #include <cstdint>
 
+#include "chre/util/data_flow_sink.h"
+#include "chre/util/data_flow_source.h"
 #include "chre/util/optional.h"
 #include "chre/util/pigweed/rpc_server.h"
 #include "chre/util/singleton.h"
@@ -33,6 +35,10 @@ class EndpointEchoTestService final
  public:
   void RunNanoappToHostTest(const google_protobuf_Empty &request,
                             ServerWriter<chre_rpc_ReturnStatus> &writer);
+
+  void RunNanoappGetEndpointInfoTest(
+      const chre_rpc_HostEndpointInfo &request,
+      ServerWriter<chre_rpc_ReturnStatus> &writer);
 };
 
 /**
@@ -68,11 +74,16 @@ class EndpointEchoTestManager {
   void setPermissionForNextMessage(uint32_t permission);
 
   /**
-   * Starts the nanoapp-initiated part of the test.
-   * @param writer The writer to use to send the test status.
+   * Starts the nanoapp-initiated part of the test. If hostEndpointInfo
+   * is provided, starts the sequence to verify endpoint info; otherwise,
+   * starts the sequence to test endpoint echo.
+   * @param writer            The writer to use to send the test status.
+   * @param hostEndpointInfo  The expected host endpoint info.
    */
   void startTest(
-      EndpointEchoTestService::ServerWriter<chre_rpc_ReturnStatus> &&writer);
+      EndpointEchoTestService::ServerWriter<chre_rpc_ReturnStatus> &&writer,
+      chre::Optional<chre_rpc_HostEndpointInfo> hostEndpointInfo =
+          chre::Optional<chre_rpc_HostEndpointInfo>());
 
  private:
   /** The service descriptor for the echo service. */
@@ -120,11 +131,68 @@ class EndpointEchoTestManager {
   bool handleEventHostToNanoappTest(uint32_t senderInstanceId,
                                     uint16_t eventType, const void *eventData);
 
+  /**
+   * Handle a CHRE event for the data flow echo test path.
+   */
+  bool handleEventDataFlowTest(uint32_t senderInstanceId, uint16_t eventType,
+                               const void *eventData);
+
+  /**
+   * Handles the CHRE_EVENT_DATA_FLOW_SINK_CREATED event for variable size data
+   * flow.
+   */
+  bool handleVariableDataFlowSinkCreated(const chreDataFlowSinkInfo *info);
+
+  /**
+   * Handles the CHRE_EVENT_DATA_FLOW_SINK_CREATED event for fixed size data
+   * flow.
+   */
+  bool handleFixedDataFlowSinkCreated(const chreDataFlowSinkInfo *info);
+
+  /**
+   * Handles the CHRE_EVENT_DATA_FLOW_CREATED event for variable size data flow.
+   */
+  bool handleVariableDataFlowCreated();
+
+  /**
+   * Handles the CHRE_EVENT_DATA_FLOW_CREATED event for fixed size data flow.
+   */
+  bool handleFixedDataFlowCreated();
+
+  /**
+   * Handles the CHRE_EVENT_DATA_FLOW_ALERT event for variable size data flow.
+   */
+  bool handleVariableDataFlowAlert();
+
+  /**
+   * Handles the CHRE_EVENT_DATA_FLOW_ALERT event for fixed size data flow.
+   */
+  bool handleFixedDataFlowAlert();
+
+  /**
+   * Closes and resets all data flow sinks and sources.
+   *
+   * This should be called when both the source and sink sides of the data flow
+   * have signaled that they are stopped to ensure resources are properly
+   * released.
+   */
+  void closeDataFlows();
+
   /** Runs the nanoapp-initiated part of the test. */
   void runNanoappToHostTest(TestPhase phase);
 
   /**
-   * Sends the test status to the host.
+   * Sends the test status to the host using the provided writer.
+   * @param writer The writer to use to send the test status.
+   * @param success Whether the test passed.
+   * @param errorMessage The error message if the test failed.
+   */
+  void sendTestStatus(
+      EndpointEchoTestService::ServerWriter<chre_rpc_ReturnStatus> &writer,
+      bool success, const char *errorMessage);
+
+  /**
+   * Sends the test status to the host using the internal writer.
    * @param success Whether the test passed.
    * @param errorMessage The error message if the test failed.
    */
@@ -135,6 +203,12 @@ class EndpointEchoTestManager {
 
   /** Sends a test fail status to the host. */
   void failTest(const char *errorMessage);
+
+  /**
+   * Validates the endpoint info against the expected values in the request.
+   * @param info The session info containing the hub ID and endpoint ID.
+   */
+  void validateEndpointInfo(const chreMsgSessionInfo *info);
 
   /** pw_rpc service used to process the RPCs. */
   EndpointEchoTestService mEndpointEchoTestService;
@@ -158,8 +232,23 @@ class EndpointEchoTestManager {
   /** The session ID for the echo service. */
   uint16_t mSessionId = CHRE_MSG_SESSION_ID_INVALID;
 
+  /** The rpc request received for endpoint info verification. */
+  chre::Optional<chre_rpc_HostEndpointInfo> mHostEndpointInfo;
+
   /** The message to send for the test. */
   uint8_t mMessageBuffer[10];
+
+  /** Data Flow members for echoing. */
+  uint64_t mMessageDataFlowEndpointId = 0;
+
+  chre::Optional<chre::DataFlowSink<uint8_t>> mDataFlowSink;
+  chre::Optional<chre::VariableDataFlowSink> mVariableDataFlowSink;
+  chre::Optional<chre::DataFlowSource<uint8_t>> mDataFlowSource;
+  chre::Optional<chre::VariableDataFlowSource> mVariableDataFlowSource;
+
+  bool mMessageDataFlowStopped = false;
+  bool mEchoDataFlowSinkStopped = false;
+  bool mIsDataFlowSinkConfigured = false;
 };
 
 typedef chre::Singleton<EndpointEchoTestManager>

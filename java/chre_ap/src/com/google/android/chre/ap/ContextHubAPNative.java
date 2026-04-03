@@ -90,6 +90,13 @@ public class ContextHubAPNative {
     }
 
     /**
+     * @return The Android SDK version (API level).
+     */
+    static int getAndroidApiLevel() {
+        return android.os.Build.VERSION.SDK_INT;
+    }
+
+    /**
      * Called by native code to request cell info.
      * According to requirements: purely cache based, no new scan, no new threads.
      */

@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <tuple>
 #include <utility>
 
 #include "chre/platform/atomic_ref.h"
@@ -49,7 +50,7 @@ constexpr uint32_t kFlagCountInc = 0x10000;
 constexpr uint32_t kFlagCountMask = 0xffff0000;
 
 /**
- * Deallocates the block ring starting at the given head.
+ * Deallocates a block chain starting at the given head.
  *
  * @param shmemBase The base address of the shared memory.
  * @param shmemSize The size of the shared memory.
@@ -57,8 +58,8 @@ constexpr uint32_t kFlagCountMask = 0xffff0000;
  * @param layout The layout of the block ring.
  * @param head The head of the block ring to deallocate. May be nullptr.
  */
-void deallocateBlockRing(const AllocatorRegion &region,
-                         pw::allocator::Layout layout, BlockHeader *head) {
+void deallocateBlockChain(const AllocatorRegion &region,
+                          pw::allocator::Layout layout, BlockHeader *head) {
   if (!head) {
     return;
   }
@@ -76,52 +77,42 @@ void deallocateBlockRing(const AllocatorRegion &region,
 /**
  * Allocate a block in shared memory.
  *
- * @param allocator The allocator used to allocate the block.
+ * @param region The region to allocate the block from.
  * @param layout The layout of the block.
  * @param blockCapacity The capacity of the block. This cannot be inferred from
  * the layout as it is dependent on element size and alignment.
- * @param variableData True iff the queue holds variable-data elements.
+ * @param initBlockFn Function used to initialize the block.
  * @return The allocated block on success, nullptr on failure.
  */
-BlockHeader *allocateBlock(pw::Allocator &allocator,
+BlockHeader *allocateBlock(const AllocatorRegion &region,
                            pw::allocator::Layout layout, uint32_t blockCapacity,
-                           bool variableData) {
-  auto *block = static_cast<BlockHeader *>(allocator.Allocate(layout));
+                           InitBlockFn initBlockFn) {
+  auto *block = static_cast<BlockHeader *>(region.allocator->Allocate(layout));
   if (block) {
-    ::chre::AtomicUint32Ref(block->baseIndex).store(0);
-    ::chre::AtomicUint32Ref(block->skipIndex).store(blockCapacity);
-  }
-  if (variableData) {
-    auto *variableDataBlock =
-        reinterpret_cast<VariableDataBlockHeader *>(block);
-    variableDataBlock->firstElementIndex = blockCapacity;
+    initBlockFn(region.base, *block, blockCapacity);
   }
   return block;
 }
 
 /**
- * Allocates a block ring in shared memory.
+ * Allocates a chain of blocks in shared memory.
  *
- * @param shmemBase The shared memory region in which to allocate the blocks.
+ * @param region The region to allocate the block(s) from.
  * @param layout The layout of the block ring.
  * @param blockCapacity The capacity of the block ring. This cannot be inferred
  * from the layout as it is dependent on element size and alignment.
  * @param count The number of blocks to allocate.
- * @param variableData True iff the queue holds variable-data elements.
- * @return Pointer to one block in the ring on success.
+ * @param initBlockFn Function used to initialize each block.
+ * @return A tuple of pointers to the first and last blocks in the chain and the
+ * number of blocks allocated.
  */
-pw::Result<BlockHeader *> allocateBlockRing(const AllocatorRegion &region,
-                                            pw::allocator::Layout layout,
-                                            uint32_t blockCapacity,
-                                            size_t count, bool variableData) {
-  if (count == 0) {
-    PW_LOG_ERROR("allocateBlockRing: requested 0 blocks.");
-    return pw::Status::InvalidArgument();
-  }
+std::tuple<BlockHeader *, BlockHeader *, size_t> allocateBlockChain(
+    const AllocatorRegion &region, pw::allocator::Layout layout,
+    uint32_t blockCapacity, size_t count, InitBlockFn initBlockFn) {
   BlockHeader *head = nullptr, *prev = nullptr;
-  for (size_t i = 0; i < count; ++i) {
-    if (auto *block = allocateBlock(*region.allocator, layout, blockCapacity,
-                                    variableData);
+  size_t allocatedCount = 0;
+  for (; allocatedCount < count; ++allocatedCount) {
+    if (auto *block = allocateBlock(region, layout, blockCapacity, initBlockFn);
         block) {
       if (!head) {
         head = block;
@@ -130,12 +121,40 @@ pw::Result<BlockHeader *> allocateBlockRing(const AllocatorRegion &region,
       }
       prev = block;
     } else {
-      deallocateBlockRing(region, layout, head);
-      PW_LOG_ERROR("allocateBlockRing: Failed to allocate.");
-      return pw::Status::ResourceExhausted();
+      break;
     }
   }
-  prev->nextBlockOffsetBytes = internal::toOffset(region.base, head);
+  return std::make_tuple(head, prev, allocatedCount);
+}
+
+/**
+ * Allocates a block ring in shared memory.
+ *
+ * @param region The region to allocate the block(s) from.
+ * @param layout The layout of the block ring.
+ * @param blockCapacity The capacity of the block ring. This cannot be inferred
+ * from the layout as it is dependent on element size and alignment.
+ * @param count The number of blocks to allocate.
+ * @param initBlockFn Function used to initialize each block.
+ * @return Pointer to one block in the ring on success.
+ */
+pw::Result<BlockHeader *> allocateBlockRing(const AllocatorRegion &region,
+                                            pw::allocator::Layout layout,
+                                            uint32_t blockCapacity,
+                                            size_t count,
+                                            InitBlockFn initBlockFn) {
+  if (count == 0) {
+    PW_LOG_ERROR("allocateBlockRing: requested 0 blocks.");
+    return pw::Status::InvalidArgument();
+  }
+  auto [head, tail, allocatedCount] =
+      allocateBlockChain(region, layout, blockCapacity, count, initBlockFn);
+  if (allocatedCount < count) {
+    deallocateBlockChain(region, layout, head);
+    PW_LOG_ERROR("allocateBlockRing: Failed to allocate.");
+    return pw::Status::ResourceExhausted();
+  }
+  tail->nextBlockOffsetBytes = internal::toOffset(region.base, head);
   return head;
 }
 
@@ -212,15 +231,11 @@ constexpr uint32_t ringDiff(uint32_t end, uint32_t begin, uint32_t size) {
  * @param writeIndex The current write index.
  * @param correction The correction to the write index for calculating the index
  * within Block::data.
- * @param tailBlock The tail block.
- * @param shmemBase The base address of the shared memory.
  */
 void initProducerDesc(ProducerDesc &desc, uint32_t writeIndex,
-                      uint32_t correction, BlockHeader *tailBlock,
-                      uintptr_t shmemBase) {
+                      uint32_t correction) {
   ::chre::AtomicUint32Ref(desc.writeIndex).store(writeIndex);
   desc.indexCorrection = correction;
-  desc.tailBlockOffsetBytes = toOffset(shmemBase, tailBlock);
 }
 
 /**
@@ -256,11 +271,17 @@ bool advanceContiguous(uint32_t blockBaseIndex, uint32_t blockSkipIndex,
   PW_ASSERT(blockIndex < blockCapacity);
   PW_ASSERT(blockSkipIndex <= blockCapacity);
   PW_ASSERT(blockBaseIndex < blockCapacity);
+  bool skipIndexSet = blockSkipIndex != blockCapacity;
   // Find the size of the next contiguous region (within count) by taking the
   // minimum with the distance to the end of the block, the distance to the skip
   // index (if set), and the distance to the base index of the block.
   auto diffToEnd = ringDiff(blockBaseIndex, blockIndex, blockCapacity);
-  auto diffToSkip = ringDiff(blockSkipIndex, blockIndex, blockCapacity);
+  auto diffToSkip = blockCapacity;
+  if (skipIndexSet) {
+    diffToSkip = blockIndex == blockSkipIndex
+                     ? 0
+                     : ringDiff(blockSkipIndex, blockIndex, blockCapacity);
+  }
   auto diffToWrap = blockCapacity - blockIndex;
   count = std::min({count, diffToEnd, diffToSkip, diffToWrap});
   // Advance the index, wrapping around the block if necessary.
@@ -269,7 +290,7 @@ bool advanceContiguous(uint32_t blockBaseIndex, uint32_t blockSkipIndex,
   // The end of the block is reached if one of the following is true:
   // * The skip index is set and the index has reached it.
   // * The skip index is unset and the index has reached the block's base index.
-  return (blockIndex == blockBaseIndex && blockSkipIndex == blockCapacity) ||
+  return (blockIndex == blockBaseIndex && !skipIndexSet) ||
          blockIndex == blockSkipIndex;
 }
 
@@ -295,18 +316,17 @@ uint32_t blockCountForEpoch(uint32_t epoch) {
 /**
  * Calculates the increment to the index correction when entering a block.
  *
- * @param curr The current block.
- * @param next The next block.
+ * @param currBaseIndex The base index of the current block.
+ * @param currSkipIndex The skip index of the current block.
+ * @param nextBaseIndex The base index of the next block.
  * @param capacity The capacity of a block.
  * @return The increase in the correction when entering the next block.
  */
-uint32_t indexCorrectionIncrement(BlockHeader *curr, BlockHeader *next,
-                                  uint32_t capacity) {
-  auto baseIndex = ::chre::AtomicUint32Ref(curr->baseIndex).load();
-  auto skipIndex = ::chre::AtomicUint32Ref(curr->skipIndex).load();
-  uint32_t diffBase = skipIndex == capacity ? baseIndex : skipIndex;
-  return ringDiff(::chre::AtomicUint32Ref(next->baseIndex).load(), diffBase,
-                  capacity);
+uint32_t indexCorrectionIncrement(uint32_t currBaseIndex,
+                                  uint32_t currSkipIndex,
+                                  uint32_t nextBaseIndex, uint32_t capacity) {
+  uint32_t diffBase = currSkipIndex == capacity ? currBaseIndex : currSkipIndex;
+  return ringDiff(nextBaseIndex, diffBase, capacity);
 }
 
 /**
@@ -371,6 +391,20 @@ pw::allocator::Layout getBlockLayout(size_t blockCapacity, size_t elementSize,
 }
 
 }  // namespace
+
+void initFixedSizeDataBlock(uintptr_t shmemBase, BlockHeader &block,
+                            uint32_t blockCapacity) {
+  ::chre::AtomicUint32Ref(block.baseIndex).store(0);
+  ::chre::AtomicUint32Ref(block.skipIndex).store(blockCapacity);
+  block.sourceMetadata.tailBlockOffsetBytes = toOffset(shmemBase, &block);
+}
+
+void initVariableDataBlock(uintptr_t shmemBase, internal::BlockHeader &block,
+                           uint32_t blockCapacity) {
+  initFixedSizeDataBlock(shmemBase, block, blockCapacity);
+  auto &varDataBlock = reinterpret_cast<internal::VariableDataBlock &>(block);
+  varDataBlock.header.firstElementIndex = blockCapacity;
+}
 
 ScopedMemoryAccess::ScopedMemoryAccess(MemoryAccess *memAccess, uint8_t &count)
     : mMemAccess(memAccess), mCount(&count) {
@@ -454,7 +488,7 @@ pw::Result<QueuePrivate *> ProducerBase::initQueue(
 ProducerBase::ProducerBase(const AllocatorRegion &region, QueuePrivate &queue,
                            pw::allocator::Layout blockLayout,
                            uint32_t blockCapacity, uint32_t dataOffset,
-                           size_t /*maxBlockCount*/, size_t minBlockCount,
+                           size_t maxBlockCount, size_t minBlockCount,
                            DataNotifier &dataNotifier,
                            RemoteNotifyFn remoteNotifyFn,
                            MemoryAccess *memAccess)
@@ -467,15 +501,16 @@ ProducerBase::ProducerBase(const AllocatorRegion &region, QueuePrivate &queue,
       kDataOffset(dataOffset),
       kBlockCapacity(blockCapacity),
       mCurrBlock(nullptr),  // Indicate that it is uninitialized.
+      mMinBlockCountTarget(minBlockCount),
+      mMaxBlockCountTarget(maxBlockCount),
       mBlockCount(minBlockCount) {}
 
-pw::Status ProducerBase::initialize(bool variableData) {
+pw::Status ProducerBase::initialize(InitBlockFn initBlockFn) {
   PW_TRY_ASSIGN(mCurrBlock,
                 allocateBlockRing(mRegion, kBlockLayout, kBlockCapacity,
-                                  mBlockCount, variableData));
+                                  mBlockCount, initBlockFn));
   mDesc = &mCurrBlock->sourceMetadata;
-  initProducerDesc(*mDesc, /*writeIndex=*/0, /*correction=*/0, mCurrBlock,
-                   mRegion.base);
+  initProducerDesc(*mDesc, /*writeIndex=*/0, /*correction=*/0);
   ::chre::AtomicUint32Ref(mQueue->queue.blockListEpoch)
       .store(getBlockListEpoch(mBlockCount, /*epoch=*/0));
   ::chre::AtomicUint32Ref(mQueue->queue.sourceMetadataOffsetBytes)
@@ -508,15 +543,30 @@ void ProducerBase::stop() {
       });
 }
 
-pw::Status ProducerBase::setMaxBlockCountTarget(size_t /*count*/,
-                                                bool /*force*/) {
-  // TODO(b/448384247): Implement.
-  return pw::Status::Unimplemented();
+void ProducerBase::setMaxBlockCountTarget(size_t count, bool /*force*/) {
+  mMaxBlockCountTarget = count;
+  if (mMinBlockCountTarget > mMaxBlockCountTarget) {
+    mMinBlockCountTarget = mMaxBlockCountTarget;
+  }
+  // TODO(b/448384247): Implement block release logic if force is true or count
+  // is less than the current block count.
 }
 
-pw::Status ProducerBase::setMinBlockCountTarget(size_t /*count*/) {
-  // TODO(b/448384247): Implement.
-  return pw::Status::Unimplemented();
+void ProducerBase::setMinBlockCountTarget(size_t count) {
+  mMinBlockCountTarget = count;
+  if (mMinBlockCountTarget > mMaxBlockCountTarget) {
+    mMaxBlockCountTarget = mMinBlockCountTarget;
+  }
+  if (mBlockCount < mMinBlockCountTarget) {
+    auto diff = mMinBlockCountTarget - mBlockCount;
+    auto prev = mBlockCount;
+    if (auto status = allocateAndInsertBlocks(diff); !status.ok()) {
+      PW_LOG_WARN(
+          "ProducerBase::setMinBlockCountTarget: Allocated %zu of %zu blocks, "
+          "current block count: %zu",
+          mBlockCount - prev, diff, mBlockCount);
+    }
+  }
 }
 
 pw::Result<pw::ByteSpan> ProducerBase::reserve(size_t count) {
@@ -529,7 +579,7 @@ pw::Result<pw::ByteSpan> ProducerBase::reserve(size_t count) {
                         ::chre::AtomicUint32Ref(mCurrBlock->skipIndex).load(),
                         kBlockCapacity, mCurrBlockIndex, size)) {
     enterNextBlock(mCurrBlock, /*correction=*/nullptr, mCurrBlockIndex,
-                   /*convertSkipToBase=*/true);
+                   /*convertSkipToBase=*/true, /*writeIndex=*/std::nullopt);
   }
   mReserved += size;
   return pw::ByteSpan(begin, size);
@@ -550,17 +600,19 @@ pw::Status ProducerBase::truncate(size_t size) {
   }
 
   ScopedMemoryAccess memAccessScope(mMemAccess, mMemAccessCnt);
+  mAvailable += mReserved - size;
+  if (mExpansionCount) {
+    mExpansionFreeAvailability += mReserved - size;
+  }
   mReserved = size;
   // Sync the current block and index back to the write index.
-  mCurrBlock = fromOffset<BlockHeader>(mRegion, mDesc->tailBlockOffsetBytes,
-                                       kBlockLayout);
-  mCurrBlockIndex = (::chre::AtomicUint32Ref(mDesc->writeIndex).load() +
-                     mDesc->indexCorrection) %
-                    kBlockCapacity;
+  mCurrBlock = getTailBlock();
+  mCurrBlockIndex = getTailBlockIndex();
   // Advance to the new reservation size.
   advanceBlockIndexWithData(mCurrBlock, mCurrBlockIndex, /*correction=*/nullptr,
                             size, /*data=*/std::nullopt,
-                            /*convertSkipToBase=*/false);
+                            /*convertSkipToBase=*/false,
+                            /*writeIndex=*/std::nullopt);
   return pw::OkStatus();
 }
 
@@ -591,6 +643,9 @@ pw::Result<size_t> ProducerBase::push(pw::ConstByteSpan data,
   PW_TRY_ASSIGN(auto count, checkAvailable(data.size(), allOrNothing));
   advanceWriteIndex(count, data);
   mDataNotifier->onWrite(*this);
+  // Ensure the current block and index are up to date after the push.
+  mCurrBlockIndex = getTailBlockIndex();
+  mCurrBlock = getTailBlock();
   return count;
 }
 
@@ -603,51 +658,146 @@ size_t ProducerBase::size(bool includeReserved) {
   // Recalculate the available space to capture updates from consumers in shared
   // state.
   updateAvailable();
-  auto size = capacity() - mAvailable;
+  auto size = capacity() - mRawAvailable;
   // If requested, exclude reserved elements from the size.
   return includeReserved ? size : size - mReserved;
 }
 
 pw::Result<size_t> ProducerBase::checkAvailable(size_t count,
                                                 bool allOrNothing) {
-  // TODO(b/448384247): This should check against the maximum capacity.
-  if (count > capacity()) {
-    PW_LOG_ERROR("ProducerBase::checkAvailable: Count %zu exceeds capacity %zu",
-                 count, capacity());
+  const auto kMaxCapacity = capacity(/*maximum=*/true);
+  if (count > kMaxCapacity) {
+    PW_LOG_ERROR(
+        "ProducerBase::checkAvailable: Count %zu exceeds maximum capacity %zu",
+        count, kMaxCapacity);
     return pw::Status::OutOfRange();
   }
+  // If the request exceeds the current cached available space, recalculate it
+  // without causing consumers to be overwritten.
   if (count > mAvailable) {
-    // Update the available space. If allOrNothing, update consumer flags taking
-    // into account the size of the data.
-    updateAvailable(allOrNothing ? count : 0);
-    // TODO(b/448384247): Support dynamically resizing the queue.
-    if (count > mAvailable) {
-      if (allOrNothing) {
-        return pw::Status::Unavailable();
+    updateAvailable();
+  }
+  if (count > mAvailable) {
+    if (allOrNothing) {
+      // If possible, expand the queue to accommodate the request before
+      // starting to overwrite consumers. Only allow one in progress expansion
+      // at a time (it is in progress until the producer makes it all the way
+      // around the expanded queue once).
+      if (mBlockCount < mMaxBlockCountTarget && !mExpansionCount &&
+          !mUnavailableFromSkip) {
+        auto maximum = kMaxCapacity - mAvailable;
+        auto needed = count - mAvailable;
+        auto request = needed >= maximum
+                           ? mMaxBlockCountTarget - mBlockCount
+                           : (needed + kBlockCapacity - 1) / kBlockCapacity;
+        if (auto status = allocateAndInsertBlocks(request); !status.ok()) {
+          // If the allocation of all blocks failed due to insufficient memory,
+          // but the current capacity is sufficient to handle the request,
+          // ignore it and continue, since we can still overwrite consumers.
+          // Otherwise, return the error.
+          if (status != pw::Status::ResourceExhausted() || count > capacity()) {
+            return status == pw::Status::ResourceExhausted()
+                       ? pw::Status::Unavailable()
+                       : status;
+          }
+        }
       }
+      if (count > mAvailable) {
+        // As a last resort, overwrite any overwritable consumers to fulfill
+        // the request.
+        updateAvailable(/*increment=*/count);
+        if (count > mAvailable) {
+          return pw::Status::Unavailable();
+        }
+      }
+    } else {
+      // If the request is not allOrNothing, just reduce the request to the
+      // available space.
       count = mAvailable;
     }
   }
+  mExpansionFreeAvailability = mExpansionFreeAvailability > count
+                                   ? mExpansionFreeAvailability - count
+                                   : 0;
   mAvailable -= count;
   return count;
+}
+
+pw::Status ProducerBase::allocateAndInsertBlocks(size_t count) {
+  if (mBlockCount + count > mMaxBlockCountTarget) {
+    return pw::Status::OutOfRange();
+  }
+  // Seek forward from the current write / reservation index to find where we
+  // can insert the new block(s). Ideally this is the nearest block boundary,
+  // but otherwise, a skip index will be set right before the position of a
+  // consumer that would otherwise be overwritten.
+  uint32_t blockIndex = mCurrBlockIndex;
+  uint32_t distanceToConsumer = mAvailable;
+  bool blockBoundary = false;
+  while (distanceToConsumer > 0) {
+    uint32_t advance = distanceToConsumer;
+    // If we reach a block boundary, break and insert there.
+    blockBoundary =
+        advanceContiguous(mCurrBlock->baseIndex, mCurrBlock->skipIndex,
+                          kBlockCapacity, blockIndex, advance);
+    if (blockBoundary) {
+      break;
+    }
+    distanceToConsumer -= advance;
+  }
+  auto [head, tail, allocatedCount] = allocateBlockChain(
+      mRegion, kBlockLayout, kBlockCapacity, count, getInitBlockFn());
+  if (!allocatedCount) {
+    PW_LOG_WARN(
+        "ProducerBase::allocateAndInsertBlocks: Failed to allocate block");
+    return pw::Status::ResourceExhausted();
+  }
+  incrementEpoch(/*start=*/true);
+  ::chre::AtomicUint32Ref(tail->nextBlockOffsetBytes)
+      .store(mCurrBlock->nextBlockOffsetBytes);
+  if (!blockBoundary) {
+    // Subsequent blocks if any will be inserted at a block boundary.
+    blockBoundary = true;
+    // We are skipping from the middle of a block to the new block, so set
+    // the skip index appropriately.
+    ::chre::AtomicUint32Ref(mCurrBlock->skipIndex).store(blockIndex);
+    // Free availability for expansion due to adding new blocks, starting with
+    // the distance to the skip index.
+    mExpansionFreeAvailability = mAvailable;
+    // Calculate the reduction to available space due to skipping from the
+    // current block. This applies until the producer returns to the skipped
+    // block, as it is blocked on the slowest non-overwritable consumers
+    // actually moving through the skipped portion of that block.
+    mUnavailableFromSkip =
+        ringDiff(mCurrBlock->baseIndex, mCurrBlock->skipIndex, kBlockCapacity);
+  }
+  ::chre::AtomicUint32Ref(mCurrBlock->nextBlockOffsetBytes)
+      .store(toOffset(mRegion.base, head));
+  // Update mBlockCount so that it is reflected in the new epoch.
+  mBlockCount += allocatedCount;
+  incrementEpoch(/*start=*/false);
+  mAvailable += allocatedCount * kBlockCapacity;
+  mExpansionFreeAvailability += allocatedCount * kBlockCapacity;
+  mExpansionCount += allocatedCount;
+  return pw::OkStatus();
 }
 
 void ProducerBase::advanceWriteIndex(uint32_t count,
                                      std::optional<pw::ConstByteSpan> data) {
   uint32_t writeIndex = ::chre::AtomicUint32Ref(mDesc->writeIndex).load();
   uint32_t correction = mDesc->indexCorrection;
-  auto *block = fromOffset<BlockHeader>(mRegion, mDesc->tailBlockOffsetBytes,
-                                        kBlockLayout);
+  auto *block = getTailBlock();
   uint32_t blockIndex = (writeIndex + correction) % kBlockCapacity;
   advanceBlockIndexWithData(block, blockIndex, &correction, count, data,
-                            /*convertSkipToBase=*/data.has_value());
+                            /*convertSkipToBase=*/data.has_value(), writeIndex);
   // Update the write index in queue metadata.
   updateWriteIndex(block, writeIndex + count, correction);
 }
 
 void ProducerBase::advanceBlockIndexWithData(
     BlockHeader *&block, uint32_t &index, uint32_t *correction, uint32_t count,
-    std::optional<pw::ConstByteSpan> data, bool convertSkipToBase) {
+    std::optional<pw::ConstByteSpan> data, bool convertSkipToBase,
+    std::optional<uint32_t> writeIndex) {
   auto pending = count;
   while (pending > 0) {
     uint32_t advance = pending;
@@ -662,46 +812,107 @@ void ProducerBase::advanceBlockIndexWithData(
       std::memcpy(copyDst, data->data(), advance);
       data = data->subspan(advance);
     }
+    if (writeIndex) {
+      *writeIndex += advance;
+    }
     pending -= advance;
     if (toNextBlock) {
       // Only convert skip to base during a push(). If commit(), then the
       // conversion would already have occurred on reserve().
-      enterNextBlock(block, correction, index, convertSkipToBase);
+      enterNextBlock(block, correction, index, convertSkipToBase, writeIndex);
     }
   }
 }
 
 void ProducerBase::enterNextBlock(BlockHeader *&block, uint32_t *correction,
-                                  uint32_t &index, bool convertSkipToBase) {
+                                  uint32_t &index, bool convertSkipToBase,
+                                  std::optional<uint32_t> writeIndex) {
+  updateBlockListAtBoundary();
   auto *nextBlock = fromOffset<BlockHeader>(
       mRegion, ::chre::AtomicUint32Ref(block->nextBlockOffsetBytes).load(),
       kBlockLayout);
   // If the next block was skipped from on the last visit, set its base
   // index to that skip index and reset the skip index.
-  auto nextSkipIndex = ::chre::AtomicUint32Ref(nextBlock->skipIndex).load();
-  if (convertSkipToBase && nextSkipIndex != kBlockCapacity) {
-    ::chre::AtomicUint32Ref(nextBlock->baseIndex).store(nextSkipIndex);
+  if (convertSkipToBase &&
+      static_cast<uint32_t>(nextBlock->skipIndex) != kBlockCapacity) {
+    // Remove the unavailable count from the original skip.
+    mUnavailableFromSkip = 0;
+    PW_ASSERT(mExpansionCount == 0);
+    // Increment the epoch, set the new base index and clear the skip index,
+    // then increment the epoch again to indicate that state is valid.
+    incrementEpoch(/*start=*/true);
+    ::chre::AtomicUint32Ref(nextBlock->baseIndex).store(nextBlock->skipIndex);
     ::chre::AtomicUint32Ref(nextBlock->skipIndex).store(kBlockCapacity);
+    incrementEpoch(/*start=*/false);
   }
   if (correction) {
     // Update the index correction to be applied to the write index.
-    *correction += indexCorrectionIncrement(block, nextBlock, kBlockCapacity);
+    *correction +=
+        indexCorrectionIncrement(block->baseIndex, block->skipIndex,
+                                 nextBlock->baseIndex, kBlockCapacity);
+  }
+  // Check if we are skipping into the next block.
+  if (static_cast<uint32_t>(block->skipIndex) != kBlockCapacity) {
+    if (convertSkipToBase) {
+      // Start the countdown of the additional blocks. Once it hits zero, the
+      // unavailable count will be applied to available space calculations.
+      mExpansionCountCountdown = true;
+    }
+    if (writeIndex) {
+      // Store the current write index in the current block's metadata field so
+      // that consumers following this one can determine whether to follow the
+      // skip index.
+      ::chre::AtomicUint32Ref(block->sourceMetadata.writeIndex)
+          .store(*writeIndex);
+    }
+  } else if (mExpansionCountCountdown) {
+    // As we move through the blocks from the dynamic expansion, decrement the
+    // fresh block count. Ensure that the free availability is set to zero when
+    // we leave the last fresh block.
+    if (--mExpansionCount == 0) {
+      mExpansionCountCountdown = false;
+      PW_ASSERT(mExpansionFreeAvailability == 0);
+    }
   }
   block = nextBlock;
   index = ::chre::AtomicUint32Ref(block->baseIndex).load();
 }
 
+void ProducerBase::updateBlockListAtBoundary() {
+  if (mUnavailableFromSkip > 0) {
+    // Do not update the block list while handling a skip.
+    return;
+  }
+  if (mBlockCount < mMinBlockCountTarget) {
+    auto [head, tail, count] = allocateBlockChain(
+        mRegion, kBlockLayout, kBlockCapacity,
+        mMinBlockCountTarget - mBlockCount, getInitBlockFn());
+    if (!count) {
+      return;
+    }
+    incrementEpoch(/*start=*/true);
+    ::chre::AtomicUint32Ref(tail->nextBlockOffsetBytes)
+        .store(mCurrBlock->nextBlockOffsetBytes);
+    ::chre::AtomicUint32Ref(mCurrBlock->nextBlockOffsetBytes)
+        .store(toOffset(mRegion.base, head));
+    incrementEpoch(/*start=*/false);
+    mBlockCount += count;
+    mAvailable += count * kBlockCapacity;
+  } else if (mBlockCount > mMaxBlockCountTarget) {
+    // TODO(b/448384247): Implement deallocation of blocks.
+  }
+}
+
 void ProducerBase::updateWriteIndex(BlockHeader *tailBlock, uint32_t writeIndex,
                                     uint32_t correction) {
-  if (tailBlock == fromOffset<BlockHeader>(mRegion, mDesc->tailBlockOffsetBytes,
-                                           kBlockLayout)) {
+  if (tailBlock == getTailBlock()) {
     // If the currently linked tail block is still the tail, just store the
     // new write index.
     ::chre::AtomicUint32Ref(mDesc->writeIndex).store(writeIndex);
   } else {
     // Initialize the descriptor in the new tail block, then link it.
     auto &newDesc = tailBlock->sourceMetadata;
-    initProducerDesc(newDesc, writeIndex, correction, tailBlock, mRegion.base);
+    initProducerDesc(newDesc, writeIndex, correction);
     ::chre::AtomicUint32Ref(mQueue->queue.sourceMetadataOffsetBytes)
         .store(toOffset(mRegion.base, &newDesc));
     mDesc = &newDesc;
@@ -710,11 +921,12 @@ void ProducerBase::updateWriteIndex(BlockHeader *tailBlock, uint32_t writeIndex,
 
 void ProducerBase::updateAvailable(uint32_t increment) {
   auto tail = ::chre::AtomicUint32Ref(mDesc->writeIndex).load() + mReserved;
-  mAvailable = capacity() - mReserved;  // Reset available counts.
-  // Only consider consumers that are in a valid state, including overwritten.
+  mRawAvailable = mAvailable =
+      capacity() - mReserved;  // Reset available counts.
+  // Only consider consumers that are in a valid state or are overwritten.
   // Overwritten consumers should be considered because they may have synced or
   // fast-forwarded their read positions and so need to be accounted in the
-  // available space calculation or to flag them overwritten again.
+  // available space calculation or overwritten again.
   auto excludeMask = ~(static_cast<uint16_t>(ProducerFlags::kBlocking) |
                        static_cast<uint16_t>(ProducerFlags::kPendingInit) |
                        static_cast<uint16_t>(ProducerFlags::kOverwrite));
@@ -726,31 +938,52 @@ void ProducerBase::updateAvailable(uint32_t increment) {
         auto diff = writeReadDiff(tail, readIndex);
         bool overwritable = node.policy.overwrite == OverwritePolicy::kAllowed;
         bool overwritten = false;
+        const auto kCapacity = capacity();
+        // For the purposes of flagging kOverwrite and kBlocking, only reduce
+        // the available space due to skipping to a new block once we move back
+        // to the original blocks from the fresh blocks.
+        uint32_t skipReductionForFlagging = 0;
+        if (mUnavailableFromSkip && !mExpansionCountCountdown) {
+          skipReductionForFlagging = mUnavailableFromSkip;
+        }
         if (overwritable) {
-          if (diff + increment > capacity()) {
+          if (diff + increment > kCapacity - skipReductionForFlagging) {
             // If the consumer is behind by more than the current capacity or
             // would be if the increment is applied, mark it overwritten.
             setConsumerFlag(node, producerFlags, ProducerFlags::kOverwrite);
             overwritten = true;
-          } else if (getProducerFlags(producerFlags) ==
-                     ProducerFlags::kOverwrite) {
-            // The consumer is no longer reading stale data. Clear the flag to
-            // hopefully avoid a DataLoss() error on next checkState() by this
-            // consumer.
-            setConsumerFlag(node, producerFlags, ProducerFlags::kNone);
           }
-        } else if (!overwritable && diff + increment >= capacity()) {
-          // If the queue is at capacity or would be if the increment is
-          // applied and the consumer cannot be overwritten, indicate that the
-          // producer is blocked.
-          setConsumerFlag(node, producerFlags, ProducerFlags::kBlocking);
+        } else {
+          PW_ASSERT(diff <= kCapacity);
+          if (diff + increment >= kCapacity - skipReductionForFlagging) {
+            // If the queue is at capacity or would be if the increment is
+            // applied and the consumer cannot be overwritten, indicate that the
+            // producer is blocked.
+            setConsumerFlag(node, producerFlags, ProducerFlags::kBlocking);
+          }
         }
         // If this consumer is not overwritten, update the available space.
         if (!overwritten) {
-          mAvailable = std::min(mAvailable, capacity() - diff);
+          // The effective available space is reduced by the amount of space
+          // remaining in the block if any that was skipped from. This is
+          // because the producer cannot progress into the next block from the
+          // expansion blocks until the slowest non-overwritable consumers leave
+          // the skipped block and enter that next block.
+          const auto kMaxAvailable = kCapacity - diff;
+          auto available = kMaxAvailable > mUnavailableFromSkip
+                               ? kMaxAvailable - mUnavailableFromSkip
+                               : 0;
+          mAvailable = std::min(mAvailable, available);
+          mRawAvailable = std::min(mRawAvailable, kMaxAvailable);
         }
       },
       tail, increment);
+  if (mExpansionCount) {
+    // Before we have moved through the fresh blocks from an expansion, we get
+    // free available space as no consumers could possibly block the producer.
+    mAvailable = std::max(mAvailable, mExpansionFreeAvailability);
+  }
+  PW_ASSERT(mAvailable <= capacity());
 }
 
 void ProducerBase::setConsumerFlag(ConsumerNode &node, uint32_t current,
@@ -785,8 +1018,8 @@ pw::Result<uint32_t> ProducerBase::addConsumer(const RemoteEndpointId &id,
     PW_LOG_ERROR("ProducerBase::addConsumer: Failed to allocate ConsumerDesc");
     return pw::Status::ResourceExhausted();
   }
-  // Attempt to allocate a ConsumerNode to track the descriptor from the queue's
-  // primary region.
+  // Attempt to allocate a ConsumerNode to track the descriptor from the
+  // queue's primary region.
   auto *node =
       mRegion.allocator->New<internal::ConsumerNode>(id, region, desc, policy);
   if (!node) {
@@ -944,18 +1177,37 @@ void ProducerBase::clear() {
   if (mState == State::kActive) {
     stop();
   }
-  // Deallocates all consumer descriptors. Consumers will have been notified in
-  // stop() that the producer is torn down. The user may wait for the consumers
-  // to signal that they have torn down before destroying the producer.
-  // Otherwise, this does any remaining cleanup. Note that the memory remains on
-  // the consumer side.
+  // Deallocates all consumer descriptors. Consumers will have been notified
+  // in stop() that the producer is torn down. The user may wait for the
+  // consumers to signal that they have torn down before destroying the
+  // producer. Otherwise, this does any remaining cleanup. Note that the
+  // memory remains on the consumer side.
   for (auto node = mQueue->consumerList.begin();
        node != mQueue->consumerList.end();) {
     eraseConsumerNode(node);
   }
   // Release element storage back to the region allocator.
-  deallocateBlockRing(mRegion, kBlockLayout, mCurrBlock);
+  deallocateBlockChain(mRegion, kBlockLayout, mCurrBlock);
   mRegion.allocator->Deallocate(mQueue);
+}
+
+uint32_t ProducerBase::getTailBlockIndex() const {
+  return (::chre::AtomicUint32Ref(mDesc->writeIndex).load() +
+          mDesc->indexCorrection) %
+         kBlockCapacity;
+}
+
+BlockHeader *ProducerBase::getTailBlock() const {
+  return fromOffset<BlockHeader>(mRegion, mDesc->tailBlockOffsetBytes,
+                                 kBlockLayout);
+}
+
+void ProducerBase::incrementEpoch(bool start) {
+  auto epochCounter = static_cast<uint16_t>(mQueue->queue.blockListEpoch);
+  bool isEvenEpoch = (epochCounter % 2) == 0;
+  PW_ASSERT(start ? isEvenEpoch : !isEvenEpoch);
+  auto epoch = getBlockListEpoch(mBlockCount, epochCounter + 1);
+  ::chre::AtomicUint32Ref(mQueue->queue.blockListEpoch).store(epoch);
 }
 
 pw::Result<std::pair<Queue *, ConsumerDesc *>> ConsumerBase::checkArgs(
@@ -990,7 +1242,8 @@ pw::Status ConsumerBase::initialize(
     IdOrNotifyFn idOrNotifyFn, std::optional<size_t> overwriteResetOffset) {
   if (!mRemoteNotifyFn != mQueue->localNotify) {
     PW_LOG_ERROR(
-        "ConsumerBase::initialize: Got local notify function for remote queue "
+        "ConsumerBase::initialize: Got local notify function for remote "
+        "queue "
         "or vice versa");
     return pw::Status::FailedPrecondition();
   }
@@ -1000,8 +1253,9 @@ pw::Status ConsumerBase::initialize(
   if (!(flagValue == ProducerFlags::kPendingInit ||
         flagValue == ProducerFlags::kOverwrite ||
         flagValue == ProducerFlags::kBlocking)) {
-    PW_LOG_ERROR("ConsumerBase::initialize: descriptor state not one of "
-                 "{kPendingInit, kOverwrite, kBlocking}");
+    PW_LOG_ERROR(
+        "ConsumerBase::initialize: descriptor state not one of "
+        "{kPendingInit, kOverwrite, kBlocking}");
     return flagValue == ProducerFlags::kFinished ||
                    flagValue == ProducerFlags::kDisconnected
                ? pw::Status::Aborted()
@@ -1014,10 +1268,19 @@ pw::Status ConsumerBase::initialize(
   // has already been overwritten.
   mBlockListEpoch = mDesc->initialBlockListEpoch;
   mOverwriteResetOffset = overwriteResetOffset.value_or(capacity() / 2);
-  mHeadBlock = fromOffset<BlockHeader>(
-      mRegion, mDesc->initialHeadBlockOffsetBytes, kBlockLayout);
-  if (flagValue == ProducerFlags::kOverwrite) {
-    PW_TRY(handleOverwrite());
+  mHeadBlock = loadBlockHeader(*fromOffset<BlockHeader>(
+      mRegion, mDesc->initialHeadBlockOffsetBytes, kBlockLayout));
+  if (mBlockListEpoch != static_cast<uint32_t>(mDesc->initialBlockListEpoch)) {
+    // If the epoch has changed, sync to the producer since we can't recover the
+    // block list state.
+    PW_TRY(syncToProducer());
+  } else {
+    mHeadBlock.readInBlock =
+        ringDiff((mDesc->readIndex + mDesc->indexCorrection) % kBlockCapacity,
+                 mHeadBlock.baseIndex, kBlockCapacity);
+    if (flagValue == ProducerFlags::kOverwrite) {
+      PW_TRY(handleOverwrite());
+    }
   }
   clearFlags();
   return checkStateInternal();
@@ -1070,7 +1333,10 @@ pw::Status ConsumerBase::checkStateInternal() {
       [[fallthrough]];
     case ProducerFlags::kNone:
       // As long as we're in a good state, keep the epoch in sync.
-      mBlockListEpoch = ::chre::AtomicUint32Ref(mQueue->blockListEpoch).load();
+      do {
+        mBlockListEpoch =
+            ::chre::AtomicUint32Ref(mQueue->blockListEpoch).load();
+      } while (mBlockListEpoch % 2 != 0);
       return pw::OkStatus();
     default:  // Unexpected flag value. Clear it.
       PW_LOG_WARN("ConsumerBase::checkState: unexpected flag value %" PRIu16,
@@ -1082,47 +1348,55 @@ pw::Status ConsumerBase::checkStateInternal() {
 
 pw::Result<pw::ConstByteSpan> ConsumerBase::peek(size_t count) {
   ScopedMemoryAccess memAccessScope(mMemAccess, mMemAccessCnt);
-  PW_TRY(checkStateInternal());
   PW_TRY(checkAvailable(count));
   if (!mPeeked) {
+    mPeeked = 0;
     mCurrBlock = mHeadBlock;
     mCurrBlockIndex = (::chre::AtomicUint32Ref(mDesc->readIndex).load() +
                        mDesc->indexCorrection) %
                       kBlockCapacity;
   }
-  mPeeked += count;
-  const auto *data = blockData(mCurrBlock, kDataOffset) + mCurrBlockIndex;
+  updateBlockHeaderData(mCurrBlock, mCurrBlockIndex, *mPeeked);
+  const auto *data =
+      blockData(mCurrBlock.header, kDataOffset) + mCurrBlockIndex;
   uint32_t advance = count;
-  if (advanceContiguous(::chre::AtomicUint32Ref(mCurrBlock->baseIndex).load(),
-                        ::chre::AtomicUint32Ref(mCurrBlock->skipIndex).load(),
+  if (advanceContiguous(mCurrBlock.baseIndex, mCurrBlock.skipIndex,
                         kBlockCapacity, mCurrBlockIndex, advance)) {
-    mCurrBlock = fromOffset<BlockHeader>(
-        mRegion,
-        ::chre::AtomicUint32Ref(mCurrBlock->nextBlockOffsetBytes).load(),
-        kBlockLayout);
-    mCurrBlockIndex = ::chre::AtomicUint32Ref(mCurrBlock->baseIndex).load();
+    mCurrBlock = loadBlockHeader(*fromOffset<BlockHeader>(
+        mRegion, mCurrBlock.nextBlockOffset, kBlockLayout));
+    mCurrBlockIndex = mCurrBlock.baseIndex;
+  } else {
+    mCurrBlock.readInBlock += advance;
   }
+  // Account for the actual advance. A subsequent peek() over the remaining data
+  // should still succeed.
+  *mPeeked += advance;
+  mAvailable += count - advance;
   PW_TRY(checkStateInternal());
-  return pw::ConstByteSpan(data, count);
+  return pw::ConstByteSpan(data, advance);
 }
 
 pw::Status ConsumerBase::releaseNoNotify(size_t count) {
-  // It is valid to peek more than the available count. If so, clear mPeeked
-  // and update mAvailable.
-  if (count > mPeeked) {
-    if (count > mAvailable + mPeeked) {
+  auto peeked = mPeeked ? *mPeeked : 0;
+  if (count >= peeked) {
+    // It is valid to peek more than the available count. If so, clear mPeeked
+    // and update mAvailable.
+    if (count > mAvailable + peeked) {
       PW_TRY(updateAvailable());
       // If count would exceed the queue size, just sync to the producer.
-      if (count > mAvailable + mPeeked) {
+      if (count > mAvailable + peeked) {
         return syncToProducer();
       }
     }
-    mAvailable -= count - mPeeked;
-    mPeeked = 0;
+    mAvailable -= count - peeked;
+    mPeeked.reset();
   } else {
-    mPeeked -= count;
+    *mPeeked -= count;
+    if (*mPeeked == 0) {
+      mPeeked.reset();
+    }
   }
-  advanceReadIndex(count, /*buf=*/std::nullopt);
+  PW_TRY(advanceReadIndex(count, /*buf=*/std::nullopt));
   return checkStateInternal();
 }
 
@@ -1132,7 +1406,7 @@ pw::Status ConsumerBase::popNoNotify(pw::ByteSpan data) {
     return pw::Status::FailedPrecondition();
   }
   PW_TRY(checkAvailable(data.size()));
-  advanceReadIndex(data.size(), data);
+  PW_TRY(advanceReadIndex(data.size(), data));
   return checkStateInternal();
 }
 
@@ -1140,14 +1414,15 @@ pw::Status ConsumerBase::resync(size_t offset) {
   ScopedMemoryAccess memAccessScope(mMemAccess, mMemAccessCnt);
   PW_TRY(checkStateInternal());
   PW_TRY(updateAvailable());
-  mPeeked = 0;  // Reset the current block/index to the new head.
+  mPeeked.reset();  // Reset the current block/index to the new head.
   if (offset > mAvailable) {
     PW_LOG_WARN(
-        "ConsumerBase::resync: offset %zu exceeds available data %zu. Leaving "
+        "ConsumerBase::resync: offset %zu exceeds available data %zu. "
+        "Leaving "
         "read index unmodified",
         offset, mAvailable);
   } else if (offset < mAvailable) {
-    advanceReadIndex(mAvailable - offset, /*buf=*/std::nullopt);
+    PW_TRY(advanceReadIndex(mAvailable - offset, /*buf=*/std::nullopt));
     maybeNotifyOnRead();
     mAvailable -= offset;
   }
@@ -1170,14 +1445,9 @@ pw::Result<bool> ConsumerBase::isOverwritable() {
 pw::Status ConsumerBase::checkAvailable(size_t count) {
   PW_TRY(checkStateInternal());
   if (count > capacity()) {
-    // If the epoch has changed, check against the updated capacity.
-    mBlockListEpoch = ::chre::AtomicUint32Ref(mQueue->blockListEpoch).load();
-    if (count > capacity()) {
-      PW_LOG_ERROR(
-          "ConsumerBase::checkAvailable: count %zu exceeds capacity %zu", count,
-          capacity());
-      return pw::Status::OutOfRange();
-    }
+    PW_LOG_ERROR("ConsumerBase::checkAvailable: count %zu exceeds capacity %zu",
+                 count, capacity());
+    return pw::Status::OutOfRange();
   }
   if (count > mAvailable) {
     // Check if the producer has pushed new data.
@@ -1190,44 +1460,45 @@ pw::Status ConsumerBase::checkAvailable(size_t count) {
   return pw::OkStatus();
 }
 
-size_t ConsumerBase::advanceReadIndex(size_t count,
-                                      std::optional<pw::ByteSpan> buf,
-                                      bool stopOnNextBlock) {
-  auto pending = count;
+pw::Result<size_t> ConsumerBase::advanceReadIndex(
+    size_t count, std::optional<pw::ByteSpan> buf, bool stopOnNextBlock) {
+  uint32_t totalAdvance = 0;
   auto readIndex = ::chre::AtomicUint32Ref(mDesc->readIndex).load();
   uint32_t blockIndex = (readIndex + mDesc->indexCorrection) % kBlockCapacity;
   auto correction = mDesc->indexCorrection;
+  updateBlockHeaderData(mHeadBlock, blockIndex, totalAdvance);
   // Loop through the contiguous regions, copying out data and tracking index
   // corrections as the read index moves between blocks.
-  while (pending > 0) {
-    uint32_t advance = pending;
-    const auto *dataPtr = blockData(mHeadBlock, kDataOffset) + blockIndex;
+  while (totalAdvance < count) {
+    uint32_t advance = count - totalAdvance;
+    const auto *dataPtr =
+        blockData(mHeadBlock.header, kDataOffset) + blockIndex;
     bool toNextBlock =
-        advanceContiguous(::chre::AtomicUint32Ref(mHeadBlock->baseIndex).load(),
-                          ::chre::AtomicUint32Ref(mHeadBlock->skipIndex).load(),
+        advanceContiguous(mHeadBlock.baseIndex, mHeadBlock.skipIndex,
                           kBlockCapacity, blockIndex, advance);
     if (buf) {
       std::memcpy(buf->data(), dataPtr, advance);
       buf = buf->subspan(advance);
     }
-    pending -= advance;
+    totalAdvance += advance;
     if (toNextBlock) {
       auto *nextBlock = fromOffset<BlockHeader>(
-          mRegion,
-          ::chre::AtomicUint32Ref(mHeadBlock->nextBlockOffsetBytes).load(),
-          kBlockLayout);
-      correction +=
-          indexCorrectionIncrement(mHeadBlock, nextBlock, kBlockCapacity);
-      mHeadBlock = nextBlock;
-      blockIndex = ::chre::AtomicUint32Ref(mHeadBlock->baseIndex).load();
+          mRegion, mHeadBlock.nextBlockOffset, kBlockLayout);
+      correction += indexCorrectionIncrement(
+          mHeadBlock.baseIndex, mHeadBlock.skipIndex,
+          ::chre::AtomicUint32Ref(nextBlock->baseIndex).load(), kBlockCapacity);
+      mHeadBlock = loadBlockHeader(*nextBlock);
+      blockIndex = mHeadBlock.baseIndex;
       if (stopOnNextBlock) {
         break;
       }
+    } else {
+      mHeadBlock.readInBlock += advance;
     }
   }
-  ::chre::AtomicUint32Ref(mDesc->readIndex).store(readIndex + count - pending);
+  ::chre::AtomicUint32Ref(mDesc->readIndex).store(readIndex + totalAdvance);
   mDesc->indexCorrection = correction;
-  return count - pending;
+  return totalAdvance;
 }
 
 void ConsumerBase::maybeNotifyOnRead() {
@@ -1238,6 +1509,7 @@ void ConsumerBase::maybeNotifyOnRead() {
 }
 
 pw::Status ConsumerBase::handleOverwrite() {
+  mPeeked.reset();
   // If the epoch has changed, just sync to the producer.
   if (::chre::AtomicUint32Ref(mQueue->blockListEpoch).load() !=
       mBlockListEpoch) {
@@ -1249,10 +1521,17 @@ pw::Status ConsumerBase::handleOverwrite() {
   // This avoids fast-forwarding by such a small amount that the consumer gets
   // overwritten again quickly.
   auto offset = std::min(mOverwriteResetOffset, capacity() / 2);
-  // It should not be possible for mAvailable to be smaller than the offset,
-  // as that would require the capacity to have increased (meaning the epoch
-  // would have changed).
-  PW_ASSERT(mAvailable >= offset);
+  if (mAvailable <= offset) {
+    // No point fast-forwarding if we appear to be in a good position to read
+    // already. It's possible that we were previously overwritten,
+    // fast-forwarded, but were marked overwritten again in the meantime. Log
+    // this rare case.
+    PW_LOG_DEBUG(
+        "ConsumerBase::handleOverwrite: available data %zu <= than requested "
+        "fast-forward offset %zu",
+        mAvailable, offset);
+    return pw::OkStatus();
+  }
   PW_TRY(overwriteFastForward(offset));
   // If the epoch changed since we attempted to fast forward, the fast forward
   // is invalidated. Sync to the producer.
@@ -1272,7 +1551,7 @@ pw::Status ConsumerBase::updateAvailable() {
 }
 
 pw::Status ConsumerBase::overwriteFastForward(size_t offset) {
-  advanceReadIndex(mAvailable - offset, /*buf=*/std::nullopt);
+  PW_TRY(advanceReadIndex(mAvailable - offset, /*buf=*/std::nullopt));
   mAvailable = offset;
   return pw::OkStatus();
 }
@@ -1282,10 +1561,107 @@ pw::Status ConsumerBase::syncToProducer() {
   auto readIndex = ::chre::AtomicUint32Ref(producerDesc->writeIndex).load();
   ::chre::AtomicUint32Ref(mDesc->readIndex).store(readIndex);
   mDesc->indexCorrection = producerDesc->indexCorrection;
-  mHeadBlock = fromOffset<BlockHeader>(
-      mRegion, producerDesc->tailBlockOffsetBytes, kBlockLayout);
-  mBlockListEpoch = ::chre::AtomicUint32Ref(mQueue->blockListEpoch).load();
+  mHeadBlock = loadBlockHeader(*fromOffset<BlockHeader>(
+      mRegion, producerDesc->tailBlockOffsetBytes, kBlockLayout));
+  auto blockIndex = (readIndex + mDesc->indexCorrection) % kBlockCapacity;
+  mHeadBlock.readInBlock =
+      ringDiff(blockIndex, mHeadBlock.baseIndex, kBlockCapacity);
+  mPeeked.reset();
   return pw::OkStatus();
+}
+
+void ConsumerBase::updateBlockHeaderData(BlockHeaderData &data,
+                                         uint32_t blockIndex,
+                                         uint32_t advanceOverReadIndex) {
+  auto newData = loadBlockHeader(*data.header);
+  // A previous pass through this method indicated that we should ignore any
+  // future updates to the block header.
+  if (data.rejectUpdate) {
+    return;
+  }
+  newData.readInBlock = data.readInBlock;
+  if (data.skipIndex == newData.skipIndex &&
+      data.baseIndex == newData.baseIndex) {
+    if (data.nextBlockOffset != newData.nextBlockOffset) {
+      // This specifically catches the following case: this consumer was
+      // up-to-date with the producer at the base of a block, after which the
+      // producer skipped. The consumer did not load the header again until
+      // after the producer had made it all the way around the queue, returning
+      // to the same block and clearing the skip index. Now the skip and base
+      // indices match, but the next block is new. So we infer that the consumer
+      // should skip immediately to the new next block.
+      data.skipIndex = newData.baseIndex;
+      data.nextBlockOffset = newData.nextBlockOffset;
+      data.rejectUpdate = true;
+    } else {
+      // The relevant data for navigating this block have not changed. Store the
+      // new data and return.
+      data = newData;
+    }
+  } else if (data.baseIndex != newData.baseIndex) {
+    if (data.skipIndex == kBlockCapacity) {
+      // The base index has changed, but our original state didn't capture the
+      // skip index. Infer the skip index from the new base index and continue
+      // to the new next block.
+      data.skipIndex = newData.baseIndex;
+      data.nextBlockOffset = newData.nextBlockOffset;
+      data.rejectUpdate = true;
+    } else {
+      // The base index has changed while we are in the block, which may only
+      // happen when the producer enters a block. Only consumers following after
+      // the producer should follow the updated base index, so ignore the new
+      // data.
+    }
+  } else if (data.skipIndex != kBlockCapacity) {
+    // This catches the case that we captured the original skip index in our
+    // block, but the producer has wrapped back around to the block, reset the
+    // base index (which must have been our skip index), and skipped again.
+    // Follow the original skip path.
+  } else if (blockIndex != newData.skipIndex) {
+    auto newSkipIndexDiff =
+        ringDiff(newData.skipIndex, blockIndex, kBlockCapacity);
+    if (data.readInBlock + newSkipIndexDiff >= kBlockCapacity) {
+      // The skip index is behind our current block index, so we're intended to
+      // move forward using the previous state.
+    } else {
+      // The skip index is ahead of our current block index, so we're intended
+      // to move forward using the new state.
+      data = newData;
+    }
+  } else {
+    // The skip index is equal to our current block index. This is an ambiguous
+    // case as consumer state is insufficient to distinguish between a consumer
+    // following right behind the producer and a consumer a full queue's length
+    // behind. However, if the current read index (including the advance from
+    // peek) is equal to the stored write index in the block header, it
+    // indicates we should follow the producer over the skip index.
+    if (newData.writeIndexFromDesc ==
+        ::chre::AtomicUint32Ref(mDesc->readIndex).load() +
+            advanceOverReadIndex) {
+      data = newData;
+    } else {
+      data.rejectUpdate = true;
+    }
+  }
+}
+
+ConsumerBase::BlockHeaderData ConsumerBase::loadBlockHeader(
+    BlockHeader &header) {
+  BlockHeaderData data;
+  uint32_t epoch = mBlockListEpoch;
+  do {
+    data = {
+        .header = &header,
+        .nextBlockOffset =
+            ::chre::AtomicUint32Ref(header.nextBlockOffsetBytes).load(),
+        .writeIndexFromDesc =
+            ::chre::AtomicUint32Ref(header.sourceMetadata.writeIndex).load(),
+        .baseIndex = ::chre::AtomicUint32Ref(header.baseIndex).load(),
+        .skipIndex = ::chre::AtomicUint32Ref(header.skipIndex).load()};
+    mBlockListEpoch = epoch;
+    epoch = ::chre::AtomicUint32Ref(mQueue->blockListEpoch).load();
+  } while ((epoch != mBlockListEpoch) || (epoch % 2 != 0));
+  return data;
 }
 
 pw::Result<ProducerDesc *> ConsumerBase::getProducerDesc() {
@@ -1301,7 +1677,7 @@ pw::Result<ProducerDesc *> ConsumerBase::getProducerDesc() {
 }
 
 size_t ConsumerBase::capacity() {
-  return mQueue->blockCapacityBytes * blockCountForEpoch(mBlockListEpoch);
+  return kBlockCapacity * blockCountForEpoch(mBlockListEpoch);
 }
 
 void ConsumerBase::disableAndNotify() {
@@ -1415,7 +1791,7 @@ pw::Result<VariableDataProducer> VariableDataProducer::createLocal(
   VariableDataProducer producer(region, *queuePtr, blockCapacity, maxBlockCount,
                                 minBlockCount, dataNotifier,
                                 /*remoteNotifyFn=*/{}, memAccess);
-  PW_TRY(producer.initialize(/*variableData=*/true));
+  PW_TRY(producer.initialize(internal::initVariableDataBlock));
   return producer;
 }
 
@@ -1436,7 +1812,7 @@ pw::Result<VariableDataProducer> VariableDataProducer::createRemote(
   VariableDataProducer producer(region, *queuePtr, blockCapacity, maxBlockCount,
                                 minBlockCount, dataNotifier,
                                 std::move(notifyArgs.fn), memAccess);
-  PW_TRY(producer.initialize(/*variableData=*/true));
+  PW_TRY(producer.initialize(internal::initVariableDataBlock));
   return producer;
 }
 
@@ -1475,9 +1851,20 @@ pw::Result<pw::ByteSpan> VariableDataProducer::reserve(size_t count) {
 
 pw::Status VariableDataProducer::truncate(size_t size) {
   ScopedMemoryAccess memAccessScope(mMemAccess, mMemAccessCnt);
-  PW_TRY(Base::truncate(size + sizeof(internal::VariableElementHeader)));
-  // Store the new size. The memory address of the element size has not changed.
-  mCurrentHdrPtr->sizeBytes = size;
+  if (!mCurrentHdrPtr) {
+    PW_LOG_ERROR("VariableDataProducer::truncate: No active reservation");
+    return pw::Status::FailedPrecondition();
+  }
+  if (size > 0) {
+    PW_TRY(Base::truncate(size + sizeof(internal::VariableElementHeader)));
+    // Store the new size. The memory address of the element size has not
+    // changed.
+    mCurrentHdrPtr->sizeBytes = size;
+  } else {
+    // The user is discarding the reservation. Clear mCurrentHdrPtr as well.
+    PW_TRY(Base::truncate(0));
+    mCurrentHdrPtr = nullptr;
+  }
   return pw::OkStatus();
 }
 
@@ -1542,8 +1929,9 @@ void VariableDataProducer::updateFirstElementIndex() {
 
 void VariableDataProducer::enterNextBlock(internal::BlockHeader *&block,
                                           uint32_t *correction, uint32_t &index,
-                                          bool convertSkipToBase) {
-  Base::enterNextBlock(block, correction, index, convertSkipToBase);
+                                          bool convertSkipToBase,
+                                          std::optional<uint32_t> writeIndex) {
+  Base::enterNextBlock(block, correction, index, convertSkipToBase, writeIndex);
   auto *varDataBlock = reinterpret_cast<internal::VariableDataBlock *>(block);
   varDataBlock->header.firstElementIndex = kBlockCapacity;
 }
@@ -1634,8 +2022,9 @@ pw::Result<pw::ConstByteSpan> VariableDataConsumer::peek() {
   if (!mCurrentHdr) {
     PW_TRY(getHeadSize());
   }
+  auto peeked = mPeeked ? *mPeeked : 0;
   // Peek from the remaining bytes of the current head element.
-  return Base::peek(mCurrentHdr->sizeBytes - mPeeked);
+  return Base::peek(mCurrentHdr->sizeBytes - peeked);
 }
 
 pw::Status VariableDataConsumer::releaseNoNotify() {
@@ -1692,18 +2081,20 @@ pw::Status VariableDataConsumer::overwriteFastForward(size_t offset) {
   // Fast-forward through blocks until we reach an identifiable element boundary
   // past where the producer has overwritten.
   while (mAvailable > offset) {
-    auto advance = advanceReadIndex(mAvailable, /*buf=*/std::nullopt,
-                                    /*stopOnNextBlock=*/true);
+    PW_TRY_ASSIGN(auto advance,
+                  advanceReadIndex(mAvailable, /*buf=*/std::nullopt,
+                                   /*stopOnNextBlock=*/true));
     mAvailable -= advance;
     uint32_t firstElementIndex =
-        reinterpret_cast<internal::VariableDataBlock *>(mHeadBlock)
+        reinterpret_cast<internal::VariableDataBlock *>(mHeadBlock.header)
             ->header.firstElementIndex;
     if (firstElementIndex != kBlockCapacity && mAvailable < capacity()) {
       auto diff = internal::ringDiff(
           firstElementIndex,
-          ::chre::AtomicUint32Ref(mHeadBlock->baseIndex).load(),
+          ::chre::AtomicUint32Ref(mHeadBlock.header->baseIndex).load(),
           kBlockCapacity);
-      mAvailable -= advanceReadIndex(diff, /*buf=*/std::nullopt);
+      PW_TRY_ASSIGN(advance, advanceReadIndex(diff, /*buf=*/std::nullopt));
+      mAvailable -= advance;
       break;
     }
   }
@@ -1738,7 +2129,7 @@ pw::Result<UntypedProducer> UntypedProducer::createLocal(
   UntypedProducer producer(region, *queuePtr, blockCapacity, elementSize,
                            elementAlignment, maxBlockCount, minBlockCount,
                            dataNotifier, /*remoteNotifyFn=*/{}, memAccess);
-  PW_TRY(producer.initialize(/*variableData=*/false));
+  PW_TRY(producer.initialize(internal::initFixedSizeDataBlock));
   return producer;
 }
 
@@ -1762,7 +2153,7 @@ pw::Result<UntypedProducer> UntypedProducer::createRemote(
   UntypedProducer producer(region, *queuePtr, blockCapacity, elementSize,
                            elementAlignment, maxBlockCount, minBlockCount,
                            dataNotifier, std::move(notifyArgs.fn), memAccess);
-  PW_TRY(producer.initialize(/*variableData=*/false));
+  PW_TRY(producer.initialize(internal::initFixedSizeDataBlock));
   return producer;
 }
 

@@ -48,6 +48,9 @@ pw::Allocator *getAllocator() {
   return &sAllocator;
 }
 
+//! The allocator region for the region. If set, the region is from a test.
+std::optional<AllocatorRegion> gAllocatorRegion = std::nullopt;
+
 }  // anonymous namespace
 
 pw::Result<uintptr_t>
@@ -67,10 +70,11 @@ PlatformSharedDataRegionManager::allocateDataFlowRegionAsync(
     region.allocator = getAllocator();
     EventLoopManagerSingleton::get()
         ->getSharedDataRegionManager()
-        .handleAllocateDataFlowRegionAsyncResult(cookieValue, pw::OkStatus(),
-                                                 /* regionId= */ kRegionId,
-                                                 region,
-                                                 /* memoryAccess= */ nullptr);
+        .handleAllocateDataFlowRegionAsyncResult(
+            cookieValue, pw::OkStatus(),
+            /* regionId= */ kRegionId,
+            gAllocatorRegion.has_value() ? gAllocatorRegion.value() : region,
+            /* memoryAccess= */ nullptr);
   };
 
   EventLoopManagerSingleton::get()->deferCallback(
@@ -94,6 +98,15 @@ PlatformSharedDataRegionManager::incrementRegionRefCount(int32_t regionId) {
   if (regionId != kRegionId) {
     return pw::Status::InvalidArgument();
   }
+
+  if (gAllocatorRegion.has_value()) {
+    std::pair<android::contexthub::data_flow::Region,
+              android::contexthub::data_flow::MemoryAccess *>
+        retVal = {
+            {.base = gAllocatorRegion->base, .size = gAllocatorRegion->size},
+            nullptr};
+    return retVal;
+  }
   std::pair<android::contexthub::data_flow::Region,
             android::contexthub::data_flow::MemoryAccess *>
       retVal = {{.base = reinterpret_cast<uintptr_t>(gRegionBuffer),
@@ -108,6 +121,22 @@ pw::Status PlatformSharedDataRegionManager::decrementRegionRefCount(
     return pw::Status::InvalidArgument();
   }
   return pw::OkStatus();
+}
+
+bool PlatformSharedDataRegionManager::sinkOnHubRequiresSeparateMetadataRegion(
+    message::MessageHubId hubId) {
+  return EventLoopManagerSingleton::get()
+      ->getHostMessageHubManager()
+      .isHostHub(hubId);
+}
+
+void PlatformSharedDataRegionManagerBase::setAllocatorRegion(
+    const android::contexthub::data_flow::AllocatorRegion &allocatorRegion) {
+  gAllocatorRegion = allocatorRegion;
+}
+
+void PlatformSharedDataRegionManagerBase::clearAllocatorRegion() {
+  gAllocatorRegion = std::nullopt;
 }
 
 }  // namespace chre

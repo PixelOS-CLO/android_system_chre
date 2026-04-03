@@ -23,6 +23,7 @@
 
 #include "chre/core/event.h"
 #include "chre/core/event_ref_queue.h"
+#include "chre/core/wakeup_reason.h"
 #include "chre/platform/heap_block_header.h"
 #include "chre/platform/platform_nanoapp.h"
 #include "chre/platform/system_time.h"
@@ -190,10 +191,19 @@ class Nanoapp : public PlatformNanoapp {
   void processEvent(Event *event);
 
   /**
+   * @return The number of wakeups attributed to this nanoapp since boot.
+   */
+  uint32_t getWakeupCountSinceBoot() const {
+    return mNumMessageWakeupsSinceBoot + mNumTelemetryWakeupsSinceBoot;
+  }
+
+  /**
    * Log info about a single host wakeup that this nanoapp triggered by storing
    * the count of wakeups in mWakeupBuckets.
+   *
+   * @param reason The reason for the host wakeup.
    */
-  void blameHostWakeup();
+  void blameHostWakeup(WakeupReason reason);
 
   /**
    * Log info about a single message sent to the host that this nanoapp
@@ -329,8 +339,11 @@ class Nanoapp : public PlatformNanoapp {
  private:
   uint16_t mInstanceId = kInvalidInstanceId;
 
-  //! The total number of wakeup counts for a nanoapp.
-  uint32_t mNumWakeupsSinceBoot = 0;
+  //! The total number of message wakeup counts for a nanoapp.
+  uint32_t mNumMessageWakeupsSinceBoot = 0;
+
+  //! The total number of telemetry wakeup counts for a nanoapp.
+  uint32_t mNumTelemetryWakeupsSinceBoot = 0;
 
   //! The total number of messages sent to host by this nanoapp.
   uint32_t mNumMessagesSentSinceBoot = 0;
@@ -355,14 +368,17 @@ class Nanoapp : public PlatformNanoapp {
 
   //! Container for "bucketed" stats associated with wakeup logging
   struct BucketedStats {
-    BucketedStats(uint16_t wakeupCount_, uint16_t hostMessageCount_,
-                  uint64_t eventProcessTime_, uint64_t creationTimestamp_)
-        : wakeupCount(wakeupCount_),
+    BucketedStats(uint16_t messageWakeupCount_, uint16_t telemetryWakeupCount_,
+                  uint16_t hostMessageCount_, uint64_t eventProcessTime_,
+                  uint64_t creationTimestamp_)
+        : messageWakeupCount(messageWakeupCount_),
+          telemetryWakeupCount(telemetryWakeupCount_),
           hostMessageCount(hostMessageCount_),
           eventProcessTime(eventProcessTime_),
           creationTimestamp(creationTimestamp_) {}
 
-    uint16_t wakeupCount = 0;
+    uint16_t messageWakeupCount = 0;
+    uint16_t telemetryWakeupCount = 0;
     uint16_t hostMessageCount = 0;
     uint64_t eventProcessTime = 0;
     uint64_t creationTimestamp = 0;
