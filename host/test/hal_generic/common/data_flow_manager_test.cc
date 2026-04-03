@@ -59,10 +59,19 @@ constexpr int64_t kSinkHubId = 456;
 constexpr int32_t kPrimaryRegionId = 10;
 constexpr int32_t kSinkMetadataRegionId = 11;
 
+#define ASSERT_RESULT_OK_AND_ASSIGN_IMPL(lhs, rhs, val) \
+  auto val = (rhs);                                     \
+  ASSERT_TRUE(val.ok());                                \
+  lhs = std::move(val.value());
+
+#define ASSERT_RESULT_OK_AND_ASSIGN_CONCAT_INNER(lhs, rhs, line) \
+  ASSERT_RESULT_OK_AND_ASSIGN_IMPL(lhs, rhs, _val_##line)
+
+#define ASSERT_RESULT_OK_AND_ASSIGN_CONCAT(lhs, rhs, line) \
+  ASSERT_RESULT_OK_AND_ASSIGN_CONCAT_INNER(lhs, rhs, line)
+
 #define ASSERT_RESULT_OK_AND_ASSIGN(lhs, rhs) \
-  auto rhs_ = (rhs);                          \
-  ASSERT_TRUE(rhs_.ok());                     \
-  lhs = std::move(rhs_.value());
+  ASSERT_RESULT_OK_AND_ASSIGN_CONCAT(lhs, rhs, __LINE__)
 
 class MockRegionAllocator : public RegionAllocator {
  public:
@@ -1015,6 +1024,81 @@ TEST_F(DataFlowManagerTest, OnWakingAckUnknownEndpoint) {
 
   EndpointId unknown{.id = 99, .hubId = kHubId};
   mDataFlowManager->onWakingAck(flowId, unknown, 1);
+}
+
+TEST_F(DataFlowManagerTest, AddOffloadSinkMultipleDataFlows) {
+  EndpointId source1{.id = 1, .hubId = kHubId};
+  ASSERT_RESULT_OK_AND_ASSIGN(DataFlowId flowId1,
+                              createHostSourceDataFlow(source1, kRegionId));
+
+  EndpointId source2{.id = 2, .hubId = kHubId};
+  ASSERT_RESULT_OK_AND_ASSIGN(DataFlowId flowId2,
+                              createHostSourceDataFlow(source2, kRegionId + 1));
+
+  EndpointId sink{.id = 3, .hubId = kSinkHubId};
+  addOffloadSink(flowId1, source1, sink);
+  addOffloadSink(flowId2, source2, sink);
+
+  EXPECT_EQ(mDataFlowManager->verifyEndpointOnDataFlow(flowId1, sink,
+                                                       /*isHost=*/false),
+            pw::OkStatus());
+  EXPECT_EQ(mDataFlowManager->verifyEndpointOnDataFlow(flowId2, sink,
+                                                       /*isHost=*/false),
+            pw::OkStatus());
+}
+
+TEST_F(DataFlowManagerTest, AddHostSinkMultipleDataFlows) {
+  DataFlowId flowId1{.hubId = kHubId, .id = 1};
+  EndpointId source1{.id = 1, .hubId = kHubId};
+
+  DataFlowId flowId2{.hubId = kHubId, .id = 2};
+  EndpointId source2{.id = 2, .hubId = kHubId};
+
+  EndpointId sink{.id = 3, .hubId = kSinkHubId};
+
+  ASSERT_RESULT_OK_AND_ASSIGN(
+      DataFlowSinkContext context1,
+      createOffloadSourceDataFlowAndHostSink(
+          flowId1, source1, sink, kPrimaryRegionId, kSinkMetadataRegionId));
+
+  ASSERT_RESULT_OK_AND_ASSIGN(DataFlowSinkContext context2,
+                              createOffloadSourceDataFlowAndHostSink(
+                                  flowId2, source2, sink, kPrimaryRegionId + 1,
+                                  kSinkMetadataRegionId + 1));
+
+  EXPECT_EQ(mDataFlowManager->verifyEndpointOnDataFlow(flowId1, sink,
+                                                       /*isHost=*/true),
+            pw::OkStatus());
+  EXPECT_EQ(mDataFlowManager->verifyEndpointOnDataFlow(flowId2, sink,
+                                                       /*isHost=*/true),
+            pw::OkStatus());
+}
+
+TEST_F(DataFlowManagerTest, AddOffloadSourceMultipleDataFlows) {
+  DataFlowId flowId1{.hubId = kSinkHubId, .id = 100};
+  DataFlowId flowId2{.hubId = kSinkHubId, .id = 101};
+
+  EndpointId source{.id = 1, .hubId = kSinkHubId};
+
+  EndpointId sink1{.id = 2, .hubId = kHubId};
+  EndpointId sink2{.id = 3, .hubId = kHubId};
+
+  ASSERT_RESULT_OK_AND_ASSIGN(
+      DataFlowSinkContext context1,
+      createOffloadSourceDataFlowAndHostSink(
+          flowId1, source, sink1, kPrimaryRegionId, kSinkMetadataRegionId));
+
+  ASSERT_RESULT_OK_AND_ASSIGN(DataFlowSinkContext context2,
+                              createOffloadSourceDataFlowAndHostSink(
+                                  flowId2, source, sink2, kPrimaryRegionId + 1,
+                                  kSinkMetadataRegionId + 1));
+
+  EXPECT_EQ(mDataFlowManager->verifyEndpointOnDataFlow(flowId1, source,
+                                                       /*isHost=*/false),
+            pw::OkStatus());
+  EXPECT_EQ(mDataFlowManager->verifyEndpointOnDataFlow(flowId2, source,
+                                                       /*isHost=*/false),
+            pw::OkStatus());
 }
 
 }  // namespace

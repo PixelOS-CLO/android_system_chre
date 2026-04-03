@@ -220,7 +220,7 @@ void DataFlowEpollWaiterReal::processEvent(int fd) {
   DataFlowId dataFlowId;
   EndpointId endpointId;
   bool isHalAck = false;
-  uint64_t wakeCount = 0;
+  uint64_t data = 0;
   bool isWaking = false;
   {
     std::lock_guard lock(mLock);
@@ -233,21 +233,20 @@ void DataFlowEpollWaiterReal::processEvent(int fd) {
     dataFlowId = trigger.dataFlowId;
     endpointId = trigger.endpointId;
     isHalAck = trigger.alertFds.halAck.get() == fd;
-    if (isHalAck) {
-      ssize_t bytesRead =
-          TEMP_FAILURE_RETRY(read(fd, &wakeCount, sizeof(wakeCount)));
-      if (bytesRead != sizeof(wakeCount)) {
-        LOGE("Failed to read DataFlowEpollWaiter halAck fd: %s",
-             strerror(errno));
-        return;
-      }
-    } else {
-      isWaking = fd == trigger.alertFds.waking.get();
+    isWaking = trigger.alertFds.waking.get() == fd;
+    ssize_t bytesRead = TEMP_FAILURE_RETRY(read(fd, &data, sizeof(data)));
+    if (bytesRead != sizeof(data)) {
+      LOGE("Failed to read DataFlowEpollWaiter %s fd: %s",
+
+           isHalAck ? "halAck" : "alert", strerror(errno));
+
+      return;
     }
   }
   // Deliver the event outside of the lock.
   if (isHalAck) {
-    mCallback.onWakingAck(dataFlowId, endpointId, wakeCount);
+    // data is the wake count being acknowledged by the host endpoint.
+    mCallback.onWakingAck(dataFlowId, endpointId, data);
   } else {
     mCallback.onAlert(dataFlowId, endpointId, isWaking);
   }

@@ -155,11 +155,21 @@ pw::Result<DataFlowId> DataFlowManager::addHostSourceDataFlow(
   regionIt->second++;
   auto &dataFlow = mIdToDataFlow[dataFlowId] = std::make_unique<DataFlow>(
       dataFlowId, source, info, /* isHostSource= */ true);
-  mIdToEndpoint.emplace(
-      std::piecewise_construct, std::forward_as_tuple(source),
-      std::forward_as_tuple(
-          dataFlow.get(),
-          dupAlertFds(info.alertFds, /* isHostEndpoint= */ true)));
+  auto endpointIt = mIdToEndpoint.find(source);
+  if (endpointIt == mIdToEndpoint.end()) {
+    mIdToEndpoint.emplace(
+        std::piecewise_construct, std::forward_as_tuple(source),
+        std::forward_as_tuple(
+            dataFlow.get(),
+            dupAlertFds(info.alertFds, /* isHostEndpoint= */ true)));
+  } else {
+    endpointIt->second.dataFlows.insert(dataFlow.get());
+    std::get<Endpoint::AlertFdAndWakeCountMap>(endpointIt->second.map)
+        .emplace(
+            std::piecewise_construct, std::forward_as_tuple(dataFlowId),
+            std::forward_as_tuple(
+                dupAlertFds(info.alertFds, /* isHostEndpoint= */ true), 0));
+  }
   return dataFlowId;
 }
 
@@ -187,18 +197,30 @@ DataFlowManager::addOffloadSink(const DataFlowSinkRegistrationParams &params) {
   }
   PW_TRY(mEpollWaiter->addTriggers(dataFlowId, params.sinkId,
                                    params.context.alertFds));
-  Endpoint sink(dataFlow.get());
-  PW_TRY_ASSIGN(
-      auto region,
-      getOffloadSinkMetadataRegionLocked(params.sinkId, dataFlow.get(), sink)
-          .or_else([this, &dataFlowId, &params](pw::Status status) {
-            base::ScopedLockAssertion lockAssertion(mLock);
-            mEpollWaiter->removeTriggers(dataFlowId, params.sinkId)
-                .IgnoreError();
-            return status;
-          }));
+  auto endpointIt = mIdToEndpoint.find(params.sinkId);
+  std::optional<Endpoint> tempNewEndpoint;
+  if (endpointIt == mIdToEndpoint.end()) {
+    tempNewEndpoint.emplace(dataFlow.get());
+  }
+  auto &endpoint =
+      endpointIt != mIdToEndpoint.end() ? endpointIt->second : *tempNewEndpoint;
+
+  PW_TRY_ASSIGN(auto region,
+                getOffloadSinkMetadataRegionLocked(params.sinkId,
+                                                   dataFlow.get(), endpoint)
+                    .or_else([this, &dataFlowId, &params](pw::Status status) {
+                      base::ScopedLockAssertion lockAssertion(mLock);
+                      mEpollWaiter->removeTriggers(dataFlowId, params.sinkId)
+                          .IgnoreError();
+                      return status;
+                    }));
+  if (endpointIt == mIdToEndpoint.end()) {
+    mIdToEndpoint.emplace(params.sinkId, std::move(*tempNewEndpoint));
+  } else {
+    endpointIt->second.dataFlows.insert(dataFlow.get());
+  }
+
   dataFlow->sinks.insert(params.sinkId);
-  mIdToEndpoint.emplace(params.sinkId, std::move(sink));
   return std::make_pair(
       DataFlowInfo{.region = {.id = dataFlow->info.region.id},
                    .metadataOffsetBytes = dataFlow->info.metadataOffsetBytes},
@@ -254,11 +276,21 @@ pw::Result<DataFlowSinkContext> DataFlowManager::addHostSink(
     return status;
   }
   dataFlow.sinks.insert(sink);
-  mIdToEndpoint.emplace(
-      std::piecewise_construct, std::forward_as_tuple(sink),
-      std::forward_as_tuple(&dataFlow,
-                            dupAlertFds(context.alertFds,
-                                        /* isHostEndpoint= */ true)));
+  auto endpointIt = mIdToEndpoint.find(sink);
+  if (endpointIt == mIdToEndpoint.end()) {
+    mIdToEndpoint.emplace(
+        std::piecewise_construct, std::forward_as_tuple(sink),
+        std::forward_as_tuple(&dataFlow,
+                              dupAlertFds(context.alertFds,
+                                          /* isHostEndpoint= */ true)));
+  } else {
+    endpointIt->second.dataFlows.insert(&dataFlow);
+    std::get<Endpoint::AlertFdAndWakeCountMap>(endpointIt->second.map)
+        .emplace(
+            std::piecewise_construct, std::forward_as_tuple(dataFlowId),
+            std::forward_as_tuple(
+                dupAlertFds(context.alertFds, /* isHostEndpoint= */ true), 0));
+  }
   return context;
 }
 
@@ -446,7 +478,12 @@ DataFlowManager::addOffloadSourceDataFlowLocked(DataFlowId dataFlowId,
   auto [dataFlowIt, _] = mIdToDataFlow.insert(
       {dataFlowId, std::make_unique<DataFlow>(dataFlowId, source, info,
                                               /* isHostSource= */ false)});
-  mIdToEndpoint.emplace(source, dataFlowIt->second.get());
+  auto endpointIt = mIdToEndpoint.find(source);
+  if (endpointIt == mIdToEndpoint.end()) {
+    mIdToEndpoint.emplace(source, dataFlowIt->second.get());
+  } else {
+    endpointIt->second.dataFlows.insert(dataFlowIt->second.get());
+  }
   return dataFlowIt;
 }
 
@@ -503,6 +540,13 @@ void DataFlowManager::removeEndpointDataFlowAssociationLocked(
     EndpointMap::iterator endpointIt, DataFlow *dataFlow) {
   auto &endpoint = endpointIt->second;
   endpoint.dataFlows.erase(dataFlow);
+  if (endpoint.isHost) {
+    std::get<Endpoint::AlertFdAndWakeCountMap>(endpoint.map)
+        .erase(dataFlow->id);
+  } else {
+    std::get<Endpoint::MetadataRegionMap>(endpoint.map).erase(dataFlow->id);
+  }
+
   if (endpoint.dataFlows.empty()) {
     mIdToEndpoint.erase(endpointIt);
   }
