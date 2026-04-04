@@ -23,10 +23,8 @@ import android.hardware.location.NanoAppBinary;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
 
 import com.google.android.chre.test.chqts.ContextHubLoadAndUnloadNanoAppsTestExecutor;
-import com.google.android.utils.chre.ContextHubHostTestUtil;
 
 import org.junit.After;
-import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -45,9 +43,6 @@ public class GtsContextHubConcurrentLoadNanoAppTest extends GtsContextHubTestBas
     private final ContextHubLoadAndUnloadNanoAppsTestExecutor mExecutor;
 
     public GtsContextHubConcurrentLoadNanoAppTest() {
-        Assume.assumeFalse("Skipping concurrent load/unload test in static mode",
-                ContextHubHostTestUtil.isStaticNanoappsMode());
-
         ContextHubInfo contextHubInfo = getContextHubInfo();
         mExecutor =
                 new ContextHubLoadAndUnloadNanoAppsTestExecutor(

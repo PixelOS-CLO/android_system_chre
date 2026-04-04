@@ -25,7 +25,6 @@ import com.google.android.chre.test.chqts.ContextHubLoadAndUnloadNanoAppsTestExe
 import com.google.android.utils.chre.ContextHubHostTestUtil;
 
 import org.junit.After;
-import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -42,9 +41,6 @@ public class GtsContextHubLoadUnloadNanoAppTest extends GtsContextHubTestBase {
     private final NanoAppBinary mNanoAppBinary;
 
     public GtsContextHubLoadUnloadNanoAppTest() {
-        Assume.assumeFalse("Skipping dynamic load/unload test in static mode",
-                ContextHubHostTestUtil.isStaticNanoappsMode());
-
         ContextHubInfo contextHubInfo = getContextHubInfo();
         ContextHubManager contextHubManager = getContextHubManager();
         mNanoAppBinary =

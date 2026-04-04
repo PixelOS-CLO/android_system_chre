@@ -32,9 +32,18 @@ TEST(WakeupStatsManager, InitialState) {
   EXPECT_FALSE(manager.isHostWakeupBlamed());
 }
 
+TEST(WakeupStatsManager, BlameWakeupWithNullNanoapp) {
+  WakeupStatsManager manager;
+  manager.blameWakeup(nullptr, WakeupReason::NANOAPP_MESSAGE);
+  EXPECT_TRUE(manager.isHostWakeupBlamed());
+}
+
 TEST(WakeupStatsManager, BlameWakeupWithNanoapp) {
   WakeupStatsManager manager;
   Nanoapp nanoapp(kNanoappInstanceId);
+
+  // Nanoapps need to have at least one wakeup bucket to record wakeups.
+  nanoapp.cycleWakeupBuckets(chre::Nanoseconds(100));
 
   EXPECT_EQ(nanoapp.getWakeupCountSinceBoot(), 0u);
 
@@ -48,6 +57,9 @@ TEST(WakeupStatsManager, BlameOnlyOncePerCycle) {
   Nanoapp nanoapp1(kNanoappInstanceId);
   Nanoapp nanoapp2(kNanoappInstanceId + 1);
 
+  nanoapp1.cycleWakeupBuckets(chre::Nanoseconds(100));
+  nanoapp2.cycleWakeupBuckets(chre::Nanoseconds(100));
+
   manager.blameWakeup(&nanoapp1, WakeupReason::NANOAPP_MESSAGE);
   EXPECT_TRUE(manager.isHostWakeupBlamed());
   EXPECT_EQ(nanoapp1.getWakeupCountSinceBoot(), 1u);
@@ -60,8 +72,7 @@ TEST(WakeupStatsManager, BlameOnlyOncePerCycle) {
 
 TEST(WakeupStatsManager, ResetBlameClearsFlag) {
   WakeupStatsManager manager;
-  Nanoapp nanoapp(kNanoappInstanceId);
-  manager.blameWakeup(&nanoapp, WakeupReason::METRIC_LOG);
+  manager.blameWakeup(nullptr, WakeupReason::NANOAPP_MESSAGE);
   EXPECT_TRUE(manager.isHostWakeupBlamed());
 
   manager.resetBlameForHostWakeup();
@@ -71,6 +82,7 @@ TEST(WakeupStatsManager, ResetBlameClearsFlag) {
 TEST(WakeupStatsManager, MultipleCycles) {
   WakeupStatsManager manager;
   Nanoapp nanoapp(kNanoappInstanceId);
+  nanoapp.cycleWakeupBuckets(chre::Nanoseconds(100));
 
   // Cycle 1
   manager.blameWakeup(&nanoapp, WakeupReason::NANOAPP_MESSAGE);
@@ -85,38 +97,4 @@ TEST(WakeupStatsManager, MultipleCycles) {
   manager.blameWakeup(&nanoapp, WakeupReason::NANOAPP_MESSAGE);
   EXPECT_TRUE(manager.isHostWakeupBlamed());
   EXPECT_EQ(nanoapp.getWakeupCountSinceBoot(), 2u);
-}
-
-TEST(WakeupStatsManager, BlameWakeupWithMetricLog) {
-  WakeupStatsManager manager;
-  Nanoapp nanoapp(kNanoappInstanceId);
-
-  EXPECT_EQ(nanoapp.getWakeupCountSinceBoot(), 0u);
-
-  // Test METRIC_LOG wakeup
-  manager.blameWakeup(&nanoapp, WakeupReason::METRIC_LOG);
-  EXPECT_TRUE(manager.isHostWakeupBlamed());
-  EXPECT_EQ(nanoapp.getWakeupCountSinceBoot(), 1u);
-
-  // Reset for next cycle
-  manager.resetBlameForHostWakeup();
-  EXPECT_FALSE(manager.isHostWakeupBlamed());
-
-  // Test both NANOAPP_MESSAGE and METRIC_LOG contributing to total
-  manager.blameWakeup(&nanoapp, WakeupReason::NANOAPP_MESSAGE);
-  EXPECT_TRUE(manager.isHostWakeupBlamed());
-  EXPECT_EQ(nanoapp.getWakeupCountSinceBoot(), 2u);
-}
-
-TEST(WakeupStatsManager, BlameWakeupWithUnspecified) {
-  WakeupStatsManager manager;
-  Nanoapp nanoapp(kNanoappInstanceId);
-  nanoapp.cycleWakeupBuckets(chre::Nanoseconds(100));
-
-  EXPECT_EQ(nanoapp.getWakeupCountSinceBoot(), 0u);
-
-  manager.blameWakeup(&nanoapp, WakeupReason::UNSPECIFIED);
-  EXPECT_TRUE(manager.isHostWakeupBlamed());
-  // UNSPECIFIED should not increment any nanoapp wakeup counters for now
-  EXPECT_EQ(nanoapp.getWakeupCountSinceBoot(), 0u);
 }

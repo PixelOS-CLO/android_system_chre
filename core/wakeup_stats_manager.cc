@@ -16,33 +16,17 @@
 
 #include "chre/core/wakeup_stats_manager.h"
 
-#include "chre/core/event_loop_manager.h"
-#include "chre/platform/assert.h"
-#include "chre/platform/log.h"
-
 namespace chre {
 
-void WakeupStatsManager::blameWakeup(Optional<Nanoapp *> nanoapp,
-                                     WakeupReason reason) {
-  if (reason == WakeupReason::NANOAPP_MESSAGE) {
-    CHRE_ASSERT_LOG(nanoapp.has_value(),
-                    "Nanoapp message wakeup triggered with null nanoapp");
-  }
-
+void WakeupStatsManager::blameWakeup(Nanoapp *nanoapp,
+                                     WakeupReason /*reason*/) {
   if (!mHostWakeupBlamed) {
     mHostWakeupBlamed = true;
-    if (nanoapp.has_value()) {
-      nanoapp.value()->blameHostWakeup(reason);
+    if (nanoapp != nullptr) {
+      nanoapp->blameHostWakeup();
     }
     // Framework-level attribution logic for 'reason' will be added later.
   }
-}
-
-bool WakeupStatsManager::willWakeupHost() const {
-  return !EventLoopManagerSingleton::get()
-              ->getPowerControlManager()
-              .hostIsAwake() &&
-         !mHostWakeupBlamed;
 }
 
 void WakeupStatsManager::resetBlameForHostWakeup() {

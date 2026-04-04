@@ -20,11 +20,8 @@ import android.os.Build;
 
 import androidx.test.runner.AndroidJUnit4;
 
-import com.google.android.utils.chre.ContextHubHostTestUtil;
-
 import org.junit.After;
 import org.junit.Assert;
-import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
@@ -56,8 +53,6 @@ public class GtsContextHubLoadBadNanoAppTest {
      */
     @Before
     public void initContextHubManager() {
-        Assume.assumeFalse("Skipping dynamic load/unload tests in static mode",
-                ContextHubHostTestUtil.isStaticNanoappsMode());
         mContextHubManager = new GtsContextHubManagerWrapper(null);
     }
 

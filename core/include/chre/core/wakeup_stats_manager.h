@@ -18,12 +18,21 @@
 #define CHRE_CORE_WAKEUP_STATS_MANAGER_H_
 
 #include "chre/core/nanoapp.h"
-#include "chre/core/wakeup_reason.h"
 #include "chre/platform/atomic.h"
 #include "chre/util/non_copyable.h"
-#include "chre/util/optional.h"
 
 namespace chre {
+
+/**
+ * Categorization of host wakeup reasons.
+ *
+ * These values correspond to the messages in the ChreMessage union defined in
+ * system/chre/platform/shared/idl/host_messages.fbs.
+ */
+enum class WakeupReason : uint8_t {
+  NANOAPP_MESSAGE,
+  METRIC_LOG,
+};
 
 /**
  * Central manager for host wakeup attribution and framework-level statistics.
@@ -33,10 +42,11 @@ class WakeupStatsManager : public NonCopyable {
   /**
    * Records a host wakeup and attributes it to a nanoapp or the framework.
    *
-   * @param nanoapp Optional pointer to the nanoapp that triggered the wakeup.
+   * @param nanoapp Pointer to the nanoapp that triggered the wakeup, or nullptr
+   *                if triggered by the framework.
    * @param reason The reason for the host wakeup.
    */
-  void blameWakeup(Optional<Nanoapp *> nanoapp, WakeupReason reason);
+  void blameWakeup(Nanoapp *nanoapp, WakeupReason reason);
 
   /**
    * Resets the host wakeup blame latch. This should be called when the host
@@ -51,12 +61,6 @@ class WakeupStatsManager : public NonCopyable {
   bool isHostWakeupBlamed() const {
     return mHostWakeupBlamed;
   }
-
-  /**
-   * @return true if the current action will trigger a host wakeup that will be
-   *         attributed (blamed).
-   */
-  bool willWakeupHost() const;
 
  private:
   //! Ensures that we do not blame more than once per host wakeup.

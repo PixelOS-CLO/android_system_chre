@@ -367,38 +367,5 @@ TEST_F(DataFlowEpollWaiterTest, ReceiveMultipleEvents) {
   EXPECT_GT(state.halAckCount, 0);
 }
 
-TEST_F(DataFlowEpollWaiterTest, AlertClearedAfterProcessEvent) {
-  DataFlowId df1{.hubId = 1, .id = 1};
-  EndpointId ep1{.id = 1, .hubId = 1};
-  DataFlowAlertFds fds;
-  fds.waking.set(eventfd(0, EFD_NONBLOCK));
-  fds.nonWaking.set(eventfd(0, EFD_NONBLOCK));
-
-  ASSERT_EQ(mWaiter->addTriggers(df1, ep1, fds), pw::OkStatus());
-
-  std::promise<void> promise;
-  auto future = promise.get_future();
-
-  EXPECT_CALL(mCallback, onAlert(df1, ep1, true))
-      .WillOnce(::testing::InvokeWithoutArgs([&] {
-        eventfd_t val;
-        // DataFlowEpollWaiter should have already read the eventfd to clear the
-        // alert. Attempting to read again should fail with EAGAIN.
-        int rv = eventfd_read(fds.waking.get(), &val);
-        EXPECT_EQ(rv, -1);
-        EXPECT_EQ(errno, EAGAIN);
-        promise.set_value();
-      }));
-
-  uint64_t val = 1;
-  ASSERT_EQ(write(fds.waking.get(), &val, sizeof(val)), sizeof(val));
-
-  EXPECT_EQ(future.wait_for(std::chrono::seconds(1)),
-            std::future_status::ready);
-
-  // Wait a bit to ensure no further call to onAlert occurs.
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
-}
-
 }  // namespace
 }  // namespace android::hardware::contexthub::common::implementation

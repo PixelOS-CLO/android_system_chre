@@ -22,7 +22,6 @@
 #include "chre/platform/android/platform_log.h"
 #include "chre/platform/shared/init.h"
 #include "chre/platform/system_timer.h"
-#include "chrex_api/chrex_android.h"
 #include "chrex_api/chrex_wake_lock.h"
 
 #include <android/log_macros.h>
@@ -39,7 +38,6 @@ bool g_chre_initialized = false;
 
 static JavaVM *g_javaVM = nullptr;
 static jobject g_contextHubAPManagerInstance = nullptr;
-static jclass g_contextHubAPNativeClass = nullptr;
 static jmethodID g_onMessageMethodID = nullptr;
 static jclass g_alarmBridgeClass = nullptr;
 static jmethodID g_setAlarmMethod = nullptr;
@@ -47,7 +45,6 @@ static jmethodID g_cancelAlarmMethod = nullptr;
 static jclass g_wakeLockBridgeClass = nullptr;
 static jmethodID g_wakeLockAcquireMethod = nullptr;
 static jmethodID g_wakeLockReleaseMethod = nullptr;
-static jmethodID g_getAndroidApiLevelMethod = nullptr;
 
 void messageCallback(int64_t nanoAppId, int32_t messageType, void *messageBody,
                      size_t messageBodyLen) {
@@ -182,29 +179,6 @@ void chrexApWakeLockRelease(const std::string &lock_name) {
   if (chreThread) {
     g_javaVM->DetachCurrentThread();
   }
-}
-
-int32_t chrexGetAndroidApiLevel() {
-  if (g_javaVM == nullptr || g_contextHubAPNativeClass == nullptr ||
-      g_getAndroidApiLevelMethod == nullptr) {
-    ALOGE("JNI not initialized for getAndroidApiLevel");
-    return -1;
-  }
-
-  JNIEnv *env;
-  jint attachResult = g_javaVM->AttachCurrentThread(&env, nullptr);
-  if (attachResult != JNI_OK) {
-    ALOGE("Failed to attach current thread to JVM.");
-    return -1;
-  }
-
-  int32_t apiLevel = env->CallStaticIntMethod(g_contextHubAPNativeClass,
-                                              g_getAndroidApiLevelMethod);
-
-  if (chreThread) {
-    g_javaVM->DetachCurrentThread();
-  }
-  return apiLevel;
 }
 
 static void onCellInfoReceived(JNIEnv *env, jclass /*clazz*/,
@@ -415,13 +389,6 @@ static void nativeRegister(JNIEnv *env, jobject, jobject instance) {
       g_wakeLockReleaseMethod == nullptr) {
     ALOGE("Cannot find methods in WakeLockBridge");
   }
-
-  g_getAndroidApiLevelMethod = env->GetStaticMethodID(
-      g_contextHubAPNativeClass, "getAndroidApiLevel", "()I");
-
-  if (g_getAndroidApiLevelMethod == nullptr) {
-    ALOGE("Failed to find method 'getAndroidApiLevel'.");
-  }
 }
 
 static jboolean isInitialized(JNIEnv * /*env*/, jobject /*thiz*/) {
@@ -449,22 +416,19 @@ static JNINativeMethod methods[] = {
      (void *)onCellInfoReceived},
 };
 
-static int registerNatives(JNIEnv *env) {
-  jclass nativeClass =
-      env->FindClass("com/google/android/chre/ap/ContextHubAPNative");
-  if (nativeClass == nullptr) {
-    ALOGE("Failed to find class ContextHubAPNative.");
-    return JNI_FALSE;
-  }
-  g_contextHubAPNativeClass = (jclass)env->NewGlobalRef(nativeClass);
+// Register native methods for all classes we know about.
+static const char *classPathName =
+    "com/google/android/chre/ap/ContextHubAPNative";
 
-  if (g_contextHubAPNativeClass == nullptr) {
-    ALOGE("Unable to find ContextHubAPNative class.");
+static int registerNatives(JNIEnv *env) {
+  auto clazz = env->FindClass(classPathName);
+  if (clazz == nullptr) {
+    ALOGE("Native registration unable to find class '%s'", classPathName);
     return JNI_FALSE;
   }
-  if (env->RegisterNatives(nativeClass, methods,
+  if (env->RegisterNatives(clazz, methods,
                            sizeof(methods) / sizeof(methods[0])) < 0) {
-    ALOGE("RegisterNatives failed for ContextHubAPNative class.");
+    ALOGE("RegisterNatives failed for '%s'", classPathName);
     return JNI_FALSE;
   }
   return JNI_TRUE;

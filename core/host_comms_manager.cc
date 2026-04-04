@@ -403,11 +403,11 @@ void HostCommsManager::deliverNanoappMessageFromHost(
 
 bool HostCommsManager::doSendMessageToHostFromNanoapp(
     Nanoapp *nanoapp, MessageToHost *msgToHost) {
-  CHRE_ASSERT(nanoapp != nullptr);
-
-  bool wokeHost = EventLoopManagerSingleton::get()
-                      ->getWakeupStatsManager()
-                      .willWakeupHost();
+  bool hostWasAwake =
+      EventLoopManagerSingleton::get()->getPowerControlManager().hostIsAwake();
+  bool wokeHost = !hostWasAwake && !EventLoopManagerSingleton::get()
+                                        ->getWakeupStatsManager()
+                                        .isHostWakeupBlamed();
   msgToHost->toHostData.wokeHost = wokeHost;
 
   {

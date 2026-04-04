@@ -20,40 +20,6 @@
 #include "jni.h"
 
 namespace chre {
-namespace {
-
-jclass findClass(JNIEnv *env, const char *name) {
-  jclass cls = env->FindClass(name);
-  if (env->ExceptionCheck()) {
-    env->ExceptionClear();
-    return nullptr;
-  }
-  return cls;
-}
-
-jmethodID getMethodID(JNIEnv *env, jclass cls, const char *name,
-                      const char *sig) {
-  if (cls == nullptr) return nullptr;
-  jmethodID mid = env->GetMethodID(cls, name, sig);
-  if (env->ExceptionCheck()) {
-    env->ExceptionClear();
-    return nullptr;
-  }
-  return mid;
-}
-
-jmethodID getStaticMethodID(JNIEnv *env, jclass cls, const char *name,
-                            const char *sig) {
-  if (cls == nullptr) return nullptr;
-  jmethodID mid = env->GetStaticMethodID(cls, name, sig);
-  if (env->ExceptionCheck()) {
-    env->ExceptionClear();
-    return nullptr;
-  }
-  return mid;
-}
-
-}  // namespace
 
 void JniManager::init(JavaVM *vm) {
   mJavaVm = vm;
@@ -71,183 +37,181 @@ void JniManager::init(JavaVM *vm) {
   // --- WWAN Initialization ---
   // ContextHubAPNative
   jclass nativeCls =
-      findClass(env, "com/google/android/chre/ap/ContextHubAPNative");
+      env->FindClass("com/google/android/chre/ap/ContextHubAPNative");
   if (nativeCls) {
     mWwanJniCache.contextHubNativeClass = (jclass)env->NewGlobalRef(nativeCls);
     mWwanJniCache.getCapabilitiesMethod =
-        getStaticMethodID(env, nativeCls, "getWwanCapabilities", "()I");
+        env->GetStaticMethodID(nativeCls, "getWwanCapabilities", "()I");
     mWwanJniCache.requestCellInfoMethod =
-        getStaticMethodID(env, nativeCls, "requestWwanCellInfo", "()Z");
+        env->GetStaticMethodID(nativeCls, "requestWwanCellInfo", "()Z");
   }
 
   // Base CellInfo
-  jclass baseCi = findClass(env, "android/telephony/CellInfo");
+  jclass baseCi = env->FindClass("android/telephony/CellInfo");
   if (baseCi) {
     mWwanJniCache.getTimeStamp =
-        getMethodID(env, baseCi, "getTimeStamp", "()J");
+        env->GetMethodID(baseCi, "getTimeStamp", "()J");
     mWwanJniCache.isRegistered =
-        getMethodID(env, baseCi, "isRegistered", "()Z");
+        env->GetMethodID(baseCi, "isRegistered", "()Z");
   }
 
   // LTE
-  jclass ciLte = findClass(env, "android/telephony/CellInfoLte");
-  jclass idLte = findClass(env, "android/telephony/CellIdentityLte");
-  jclass sigLte = findClass(env, "android/telephony/CellSignalStrengthLte");
+  jclass ciLte = env->FindClass("android/telephony/CellInfoLte");
+  jclass idLte = env->FindClass("android/telephony/CellIdentityLte");
+  jclass sigLte = env->FindClass("android/telephony/CellSignalStrengthLte");
   if (ciLte && idLte && sigLte) {
     mWwanJniCache.cellInfoLteClass = (jclass)env->NewGlobalRef(ciLte);
 
-    mWwanJniCache.lteGetIdentity = getMethodID(
-        env, ciLte, "getCellIdentity", "()Landroid/telephony/CellIdentityLte;");
+    mWwanJniCache.lteGetIdentity = env->GetMethodID(
+        ciLte, "getCellIdentity", "()Landroid/telephony/CellIdentityLte;");
     mWwanJniCache.lteGetSignal =
-        getMethodID(env, ciLte, "getCellSignalStrength",
-                    "()Landroid/telephony/CellSignalStrengthLte;");
+        env->GetMethodID(ciLte, "getCellSignalStrength",
+                         "()Landroid/telephony/CellSignalStrengthLte;");
 
-    mWwanJniCache.lteIdGetMcc = getMethodID(env, idLte, "getMcc", "()I");
-    mWwanJniCache.lteIdGetMnc = getMethodID(env, idLte, "getMnc", "()I");
-    mWwanJniCache.lteIdGetCi = getMethodID(env, idLte, "getCi", "()I");
-    mWwanJniCache.lteIdGetPci = getMethodID(env, idLte, "getPci", "()I");
-    mWwanJniCache.lteIdGetTac = getMethodID(env, idLte, "getTac", "()I");
+    mWwanJniCache.lteIdGetMcc = env->GetMethodID(idLte, "getMcc", "()I");
+    mWwanJniCache.lteIdGetMnc = env->GetMethodID(idLte, "getMnc", "()I");
+    mWwanJniCache.lteIdGetCi = env->GetMethodID(idLte, "getCi", "()I");
+    mWwanJniCache.lteIdGetPci = env->GetMethodID(idLte, "getPci", "()I");
+    mWwanJniCache.lteIdGetTac = env->GetMethodID(idLte, "getTac", "()I");
 
-    mWwanJniCache.lteSigGetDbm = getMethodID(env, sigLte, "getDbm", "()I");
-    mWwanJniCache.lteSigGetRsrp = getMethodID(env, sigLte, "getRsrp", "()I");
-    mWwanJniCache.lteSigGetRsrq = getMethodID(env, sigLte, "getRsrq", "()I");
-    mWwanJniCache.lteSigGetRssnr = getMethodID(env, sigLte, "getRssnr", "()I");
+    mWwanJniCache.lteSigGetDbm = env->GetMethodID(sigLte, "getDbm", "()I");
+    mWwanJniCache.lteSigGetRsrp = env->GetMethodID(sigLte, "getRsrp", "()I");
+    mWwanJniCache.lteSigGetRsrq = env->GetMethodID(sigLte, "getRsrq", "()I");
+    mWwanJniCache.lteSigGetRssnr = env->GetMethodID(sigLte, "getRssnr", "()I");
     mWwanJniCache.lteSigGetTa =
-        getMethodID(env, sigLte, "getTimingAdvance", "()I");
+        env->GetMethodID(sigLte, "getTimingAdvance", "()I");
   }
 
   // GSM
-  jclass ciGsm = findClass(env, "android/telephony/CellInfoGsm");
-  jclass idGsm = findClass(env, "android/telephony/CellIdentityGsm");
-  jclass sigGsm = findClass(env, "android/telephony/CellSignalStrengthGsm");
+  jclass ciGsm = env->FindClass("android/telephony/CellInfoGsm");
+  jclass idGsm = env->FindClass("android/telephony/CellIdentityGsm");
+  jclass sigGsm = env->FindClass("android/telephony/CellSignalStrengthGsm");
   if (ciGsm && idGsm && sigGsm) {
     mWwanJniCache.cellInfoGsmClass = (jclass)env->NewGlobalRef(ciGsm);
-    mWwanJniCache.gsmGetIdentity = getMethodID(
-        env, ciGsm, "getCellIdentity", "()Landroid/telephony/CellIdentityGsm;");
+    mWwanJniCache.gsmGetIdentity = env->GetMethodID(
+        ciGsm, "getCellIdentity", "()Landroid/telephony/CellIdentityGsm;");
     mWwanJniCache.gsmGetSignal =
-        getMethodID(env, ciGsm, "getCellSignalStrength",
-                    "()Landroid/telephony/CellSignalStrengthGsm;");
+        env->GetMethodID(ciGsm, "getCellSignalStrength",
+                         "()Landroid/telephony/CellSignalStrengthGsm;");
 
-    mWwanJniCache.gsmIdGetMcc = getMethodID(env, idGsm, "getMcc", "()I");
-    mWwanJniCache.gsmIdGetMnc = getMethodID(env, idGsm, "getMnc", "()I");
-    mWwanJniCache.gsmIdGetLac = getMethodID(env, idGsm, "getLac", "()I");
-    mWwanJniCache.gsmIdGetCid = getMethodID(env, idGsm, "getCid", "()I");
-    mWwanJniCache.gsmIdGetArfcn = getMethodID(env, idGsm, "getArfcn", "()I");
-    mWwanJniCache.gsmIdGetBsic = getMethodID(env, idGsm, "getBsic", "()I");
+    mWwanJniCache.gsmIdGetMcc = env->GetMethodID(idGsm, "getMcc", "()I");
+    mWwanJniCache.gsmIdGetMnc = env->GetMethodID(idGsm, "getMnc", "()I");
+    mWwanJniCache.gsmIdGetLac = env->GetMethodID(idGsm, "getLac", "()I");
+    mWwanJniCache.gsmIdGetCid = env->GetMethodID(idGsm, "getCid", "()I");
+    mWwanJniCache.gsmIdGetArfcn = env->GetMethodID(idGsm, "getArfcn", "()I");
+    mWwanJniCache.gsmIdGetBsic = env->GetMethodID(idGsm, "getBsic", "()I");
 
-    mWwanJniCache.gsmSigGetDbm = getMethodID(env, sigGsm, "getDbm", "()I");
+    mWwanJniCache.gsmSigGetDbm = env->GetMethodID(sigGsm, "getDbm", "()I");
     mWwanJniCache.gsmSigGetBitErrorRate =
-        getMethodID(env, sigGsm, "getBitErrorRate", "()I");
+        env->GetMethodID(sigGsm, "getBitErrorRate", "()I");
   }
 
   // WCDMA
-  jclass ciWcdma = findClass(env, "android/telephony/CellInfoWcdma");
-  jclass idWcdma = findClass(env, "android/telephony/CellIdentityWcdma");
-  jclass sigWcdma = findClass(env, "android/telephony/CellSignalStrengthWcdma");
+  jclass ciWcdma = env->FindClass("android/telephony/CellInfoWcdma");
+  jclass idWcdma = env->FindClass("android/telephony/CellIdentityWcdma");
+  jclass sigWcdma = env->FindClass("android/telephony/CellSignalStrengthWcdma");
   if (ciWcdma && idWcdma && sigWcdma) {
     mWwanJniCache.cellInfoWcdmaClass = (jclass)env->NewGlobalRef(ciWcdma);
-    mWwanJniCache.wcdmaGetIdentity =
-        getMethodID(env, ciWcdma, "getCellIdentity",
-                    "()Landroid/telephony/CellIdentityWcdma;");
+    mWwanJniCache.wcdmaGetIdentity = env->GetMethodID(
+        ciWcdma, "getCellIdentity", "()Landroid/telephony/CellIdentityWcdma;");
     mWwanJniCache.wcdmaGetSignal =
-        getMethodID(env, ciWcdma, "getCellSignalStrength",
-                    "()Landroid/telephony/CellSignalStrengthWcdma;");
+        env->GetMethodID(ciWcdma, "getCellSignalStrength",
+                         "()Landroid/telephony/CellSignalStrengthWcdma;");
 
-    mWwanJniCache.wcdmaIdGetMcc = getMethodID(env, idWcdma, "getMcc", "()I");
-    mWwanJniCache.wcdmaIdGetMnc = getMethodID(env, idWcdma, "getMnc", "()I");
-    mWwanJniCache.wcdmaIdGetLac = getMethodID(env, idWcdma, "getLac", "()I");
-    mWwanJniCache.wcdmaIdGetCid = getMethodID(env, idWcdma, "getCid", "()I");
-    mWwanJniCache.wcdmaIdGetPsc = getMethodID(env, idWcdma, "getPsc", "()I");
+    mWwanJniCache.wcdmaIdGetMcc = env->GetMethodID(idWcdma, "getMcc", "()I");
+    mWwanJniCache.wcdmaIdGetMnc = env->GetMethodID(idWcdma, "getMnc", "()I");
+    mWwanJniCache.wcdmaIdGetLac = env->GetMethodID(idWcdma, "getLac", "()I");
+    mWwanJniCache.wcdmaIdGetCid = env->GetMethodID(idWcdma, "getCid", "()I");
+    mWwanJniCache.wcdmaIdGetPsc = env->GetMethodID(idWcdma, "getPsc", "()I");
     mWwanJniCache.wcdmaIdGetUarfcn =
-        getMethodID(env, idWcdma, "getUarfcn", "()I");
+        env->GetMethodID(idWcdma, "getUarfcn", "()I");
 
-    mWwanJniCache.wcdmaSigGetDbm = getMethodID(env, sigWcdma, "getDbm", "()I");
+    mWwanJniCache.wcdmaSigGetDbm = env->GetMethodID(sigWcdma, "getDbm", "()I");
   }
 
   // NR (5G)
-  jclass ciNr = findClass(env, "android/telephony/CellInfoNr");
-  jclass idNr = findClass(env, "android/telephony/CellIdentityNr");
-  jclass sigNr = findClass(env, "android/telephony/CellSignalStrengthNr");
+  jclass ciNr = env->FindClass("android/telephony/CellInfoNr");
+  jclass idNr = env->FindClass("android/telephony/CellIdentityNr");
+  jclass sigNr = env->FindClass("android/telephony/CellSignalStrengthNr");
   if (ciNr && idNr && sigNr) {
     mWwanJniCache.cellInfoNrClass = (jclass)env->NewGlobalRef(ciNr);
-    mWwanJniCache.nrGetIdentity = getMethodID(
-        env, ciNr, "getCellIdentity", "()Landroid/telephony/CellIdentity;");
+    mWwanJniCache.nrGetIdentity = env->GetMethodID(
+        ciNr, "getCellIdentity", "()Landroid/telephony/CellIdentity;");
     mWwanJniCache.nrGetSignal =
-        getMethodID(env, ciNr, "getCellSignalStrength",
-                    "()Landroid/telephony/CellSignalStrength;");
+        env->GetMethodID(ciNr, "getCellSignalStrength",
+                         "()Landroid/telephony/CellSignalStrength;");
 
     mWwanJniCache.nrIdGetMcc =
-        getMethodID(env, idNr, "getMccString", "()Ljava/lang/String;");
+        env->GetMethodID(idNr, "getMccString", "()Ljava/lang/String;");
     mWwanJniCache.nrIdGetMnc =
-        getMethodID(env, idNr, "getMncString", "()Ljava/lang/String;");
-    mWwanJniCache.nrIdGetNci = getMethodID(env, idNr, "getNci", "()J");
-    mWwanJniCache.nrIdGetPci = getMethodID(env, idNr, "getPci", "()I");
-    mWwanJniCache.nrIdGetTac = getMethodID(env, idNr, "getTac", "()I");
-    mWwanJniCache.nrIdGetNrarfcn = getMethodID(env, idNr, "getNrarfcn", "()I");
+        env->GetMethodID(idNr, "getMncString", "()Ljava/lang/String;");
+    mWwanJniCache.nrIdGetNci = env->GetMethodID(idNr, "getNci", "()J");
+    mWwanJniCache.nrIdGetPci = env->GetMethodID(idNr, "getPci", "()I");
+    mWwanJniCache.nrIdGetTac = env->GetMethodID(idNr, "getTac", "()I");
+    mWwanJniCache.nrIdGetNrarfcn = env->GetMethodID(idNr, "getNrarfcn", "()I");
 
-    mWwanJniCache.nrSigGetDbm = getMethodID(env, sigNr, "getDbm", "()I");
-    mWwanJniCache.nrSigGetSsRsrp = getMethodID(env, sigNr, "getSsRsrp", "()I");
-    mWwanJniCache.nrSigGetSsRsrq = getMethodID(env, sigNr, "getSsRsrq", "()I");
-    mWwanJniCache.nrSigGetSsSinr = getMethodID(env, sigNr, "getSsSinr", "()I");
+    mWwanJniCache.nrSigGetDbm = env->GetMethodID(sigNr, "getDbm", "()I");
+    mWwanJniCache.nrSigGetSsRsrp = env->GetMethodID(sigNr, "getSsRsrp", "()I");
+    mWwanJniCache.nrSigGetSsRsrq = env->GetMethodID(sigNr, "getSsRsrq", "()I");
+    mWwanJniCache.nrSigGetSsSinr = env->GetMethodID(sigNr, "getSsSinr", "()I");
   }
 
   // CDMA
-  jclass ciCdma = findClass(env, "android/telephony/CellInfoCdma");
-  jclass idCdma = findClass(env, "android/telephony/CellIdentityCdma");
-  jclass sigCdma = findClass(env, "android/telephony/CellSignalStrengthCdma");
+  jclass ciCdma = env->FindClass("android/telephony/CellInfoCdma");
+  jclass idCdma = env->FindClass("android/telephony/CellIdentityCdma");
+  jclass sigCdma = env->FindClass("android/telephony/CellSignalStrengthCdma");
   if (ciCdma && idCdma && sigCdma) {
     mWwanJniCache.cellInfoCdmaClass = (jclass)env->NewGlobalRef(ciCdma);
-    mWwanJniCache.cdmaGetIdentity =
-        getMethodID(env, ciCdma, "getCellIdentity",
-                    "()Landroid/telephony/CellIdentityCdma;");
+    mWwanJniCache.cdmaGetIdentity = env->GetMethodID(
+        ciCdma, "getCellIdentity", "()Landroid/telephony/CellIdentityCdma;");
     mWwanJniCache.cdmaGetSignal =
-        getMethodID(env, ciCdma, "getCellSignalStrength",
-                    "()Landroid/telephony/CellSignalStrengthCdma;");
+        env->GetMethodID(ciCdma, "getCellSignalStrength",
+                         "()Landroid/telephony/CellSignalStrengthCdma;");
 
     mWwanJniCache.cdmaIdGetNetworkId =
-        getMethodID(env, idCdma, "getNetworkId", "()I");
+        env->GetMethodID(idCdma, "getNetworkId", "()I");
     mWwanJniCache.cdmaIdGetSystemId =
-        getMethodID(env, idCdma, "getSystemId", "()I");
+        env->GetMethodID(idCdma, "getSystemId", "()I");
     mWwanJniCache.cdmaIdGetBasestationId =
-        getMethodID(env, idCdma, "getBasestationId", "()I");
+        env->GetMethodID(idCdma, "getBasestationId", "()I");
     mWwanJniCache.cdmaIdGetLongitude =
-        getMethodID(env, idCdma, "getLongitude", "()I");
+        env->GetMethodID(idCdma, "getLongitude", "()I");
     mWwanJniCache.cdmaIdGetLatitude =
-        getMethodID(env, idCdma, "getLatitude", "()I");
+        env->GetMethodID(idCdma, "getLatitude", "()I");
 
     mWwanJniCache.cdmaSigGetCdmaDbm =
-        getMethodID(env, sigCdma, "getCdmaDbm", "()I");
+        env->GetMethodID(sigCdma, "getCdmaDbm", "()I");
     mWwanJniCache.cdmaSigGetCdmaEcio =
-        getMethodID(env, sigCdma, "getCdmaEcio", "()I");
+        env->GetMethodID(sigCdma, "getCdmaEcio", "()I");
   }
 
   // TD-SCDMA
-  jclass ciTdscdma = findClass(env, "android/telephony/CellInfoTdscdma");
-  jclass idTdscdma = findClass(env, "android/telephony/CellIdentityTdscdma");
+  jclass ciTdscdma = env->FindClass("android/telephony/CellInfoTdscdma");
+  jclass idTdscdma = env->FindClass("android/telephony/CellIdentityTdscdma");
   jclass sigTdscdma =
-      findClass(env, "android/telephony/CellSignalStrengthTdscdma");
+      env->FindClass("android/telephony/CellSignalStrengthTdscdma");
   if (ciTdscdma && idTdscdma && sigTdscdma) {
     mWwanJniCache.cellInfoTdscdmaClass = (jclass)env->NewGlobalRef(ciTdscdma);
     mWwanJniCache.tdscdmaGetIdentity =
-        getMethodID(env, ciTdscdma, "getCellIdentity",
-                    "()Landroid/telephony/CellIdentityTdscdma;");
+        env->GetMethodID(ciTdscdma, "getCellIdentity",
+                         "()Landroid/telephony/CellIdentityTdscdma;");
     mWwanJniCache.tdscdmaGetSignal =
-        getMethodID(env, ciTdscdma, "getCellSignalStrength",
-                    "()Landroid/telephony/CellSignalStrengthTdscdma;");
+        env->GetMethodID(ciTdscdma, "getCellSignalStrength",
+                         "()Landroid/telephony/CellSignalStrengthTdscdma;");
 
     mWwanJniCache.tdscdmaIdGetMcc =
-        getMethodID(env, idTdscdma, "getMccString", "()Ljava/lang/String;");
+        env->GetMethodID(idTdscdma, "getMccString", "()Ljava/lang/String;");
     mWwanJniCache.tdscdmaIdGetMnc =
-        getMethodID(env, idTdscdma, "getMncString", "()Ljava/lang/String;");
+        env->GetMethodID(idTdscdma, "getMncString", "()Ljava/lang/String;");
     mWwanJniCache.tdscdmaIdGetLac =
-        getMethodID(env, idTdscdma, "getLac", "()I");
+        env->GetMethodID(idTdscdma, "getLac", "()I");
     mWwanJniCache.tdscdmaIdGetCid =
-        getMethodID(env, idTdscdma, "getCid", "()I");
+        env->GetMethodID(idTdscdma, "getCid", "()I");
     mWwanJniCache.tdscdmaIdGetCpid =
-        getMethodID(env, idTdscdma, "getCpid", "()I");
+        env->GetMethodID(idTdscdma, "getCpid", "()I");
 
     mWwanJniCache.tdscdmaSigGetDbm =
-        getMethodID(env, sigTdscdma, "getDbm", "()I");
+        env->GetMethodID(sigTdscdma, "getDbm", "()I");
   }
 }
 

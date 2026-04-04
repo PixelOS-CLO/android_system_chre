@@ -163,25 +163,11 @@ void Nanoapp::processEvent(Event *event) {
   mWakeupBuckets.back().eventProcessTime += eventTimeMs;
 }
 
-void Nanoapp::blameHostWakeup(WakeupReason reason) {
-  if (reason == WakeupReason::NANOAPP_MESSAGE) {
-    if (mWakeupBuckets.back().messageWakeupCount < UINT16_MAX) {
-      ++mWakeupBuckets.back().messageWakeupCount;
-    }
-    if (mNumMessageWakeupsSinceBoot < UINT32_MAX) {
-      ++mNumMessageWakeupsSinceBoot;
-    }
-  } else if (reason == WakeupReason::METRIC_LOG) {
-    if (mWakeupBuckets.back().telemetryWakeupCount < UINT16_MAX) {
-      ++mWakeupBuckets.back().telemetryWakeupCount;
-    }
-    if (mNumTelemetryWakeupsSinceBoot < UINT32_MAX) {
-      ++mNumTelemetryWakeupsSinceBoot;
-    }
-  } else {
-    LOGE("Nanoapp 0x%" PRIx64 ": invalid wakeup reason %" PRIu8, getAppId(),
-         static_cast<uint8_t>(reason));
+void Nanoapp::blameHostWakeup() {
+  if (mWakeupBuckets.back().wakeupCount < UINT16_MAX) {
+    ++mWakeupBuckets.back().wakeupCount;
   }
+  if (mNumWakeupsSinceBoot < UINT32_MAX) ++mNumWakeupsSinceBoot;
 }
 
 void Nanoapp::blameHostMessageSent() {
@@ -196,7 +182,7 @@ void Nanoapp::cycleWakeupBuckets(Nanoseconds timestamp) {
     mWakeupBuckets.erase(0);
   }
   mWakeupBuckets.push_back(
-      BucketedStats(0, 0, 0, 0, timestamp.toRawNanoseconds()));
+      BucketedStats(0, 0, 0, timestamp.toRawNanoseconds()));
 }
 
 void Nanoapp::logStateToBuffer(DebugDumpWrapper &debugDump) const {
@@ -277,34 +263,27 @@ void Nanoapp::logMessageHistoryHeader(DebugDumpWrapper &debugDump) const {
 
   // Print table header
   debugDump.print("\n%33s|", " Nanoapp ");
-  debugDump.print("%12s|", " Msg W/u ");
-  // Msg W/u Histogram = 2 + (4 * kMaxSizeWakeupBuckets) + 0 = 22;
-  debugDump.print("%21s|", " Msg W/u Histogram ");
-  debugDump.print("%15s|", " Telemetry W/u ");
-  // Tel W/u Histogram = 2 + (4 * kMaxSizeWakeupBuckets) + 0 = 22;
-  debugDump.print("%21s|", " Tel W/u Histogram ");
+  debugDump.print("%11s|", " Total w/u ");
+  // Wakeup Histogram = 2 + (4 * kMaxSizeWakeupBuckets);
+  debugDump.print("%22s|", " Wakeup Histogram ");
   debugDump.print("%12s|", " Total Msgs ");
-  // Message Histogram = 2 + (4 * kMaxSizeWakeupBuckets) + 0 = 22;
-  debugDump.print("%21s|", " Message Histogram ");
+  // Message Histogram = 2 + (4 * kMaxSizeWakeupBuckets);
+  debugDump.print("%22s|", " Message Histogram ");
   debugDump.print("%12s|", " Event Time ");
-  // Event Time Histogram (ms) = 39;
-  debugDump.print("%40s", " Event Time Histogram (ms) ");
+  // Event Time Histogram (ms) = 2 + (7 * kMaxSizeWakeupBuckets);
+  debugDump.print("%37s", " Event Time Histogram (ms) ");
 
-  debugDump.print("\n%33s|%12s|", "", "");
+  debugDump.print("\n%33s|%11s|", "", "");
   for (int32_t i = kMaxSizeWakeupBuckets - 1; i >= 0; --i) {
     debugDump.print(" %3s", bucketTags[i]);
   }
-  debugDump.print(" |%15s|", "");
+  debugDump.print("  |%12s|", "");
   for (int32_t i = kMaxSizeWakeupBuckets - 1; i >= 0; --i) {
     debugDump.print(" %3s", bucketTags[i]);
   }
-  debugDump.print(" |%12s|", "");
+  debugDump.print("  |%12s|", "");
   for (int32_t i = kMaxSizeWakeupBuckets - 1; i >= 0; --i) {
-    debugDump.print(" %3s", bucketTags[i]);
-  }
-  debugDump.print(" |%12s|    ", "");
-  for (int32_t i = kMaxSizeWakeupBuckets - 1; i >= 0; --i) {
-    debugDump.print(" %6s", bucketTags[i]);
+    debugDump.print(" %7s", bucketTags[i]);
   }
   debugDump.print("\n");
 }
@@ -312,32 +291,19 @@ void Nanoapp::logMessageHistoryHeader(DebugDumpWrapper &debugDump) const {
 void Nanoapp::logMessageHistoryEntry(DebugDumpWrapper &debugDump) const {
   debugDump.print("%32s |", getAppName());
 
-  // Print message wakeup total and histogram
-  debugDump.print(" %10" PRIu32 " |", mNumMessageWakeupsSinceBoot);
+  // Print wakeupCount and histogram
+  debugDump.print(" %9" PRIu32 " | ", mNumWakeupsSinceBoot);
   for (size_t i = kMaxSizeWakeupBuckets - 1; i > 0; --i) {
     if (i >= mWakeupBuckets.size()) {
       debugDump.print(" --,");
     } else {
-      debugDump.print(" %2" PRIu16 ",", mWakeupBuckets[i].messageWakeupCount);
+      debugDump.print(" %2" PRIu16 ",", mWakeupBuckets[i].wakeupCount);
     }
   }
-  debugDump.print(" %2" PRIu16 "  |",
-                  mWakeupBuckets.front().messageWakeupCount);
-
-  // Print telemetry wakeup total and histogram
-  debugDump.print(" %13" PRIu32 " |", mNumTelemetryWakeupsSinceBoot);
-  for (size_t i = kMaxSizeWakeupBuckets - 1; i > 0; --i) {
-    if (i >= mWakeupBuckets.size()) {
-      debugDump.print(" --,");
-    } else {
-      debugDump.print(" %2" PRIu16 ",", mWakeupBuckets[i].telemetryWakeupCount);
-    }
-  }
-  debugDump.print(" %2" PRIu16 "  |",
-                  mWakeupBuckets.front().telemetryWakeupCount);
+  debugDump.print(" %2" PRIu16 "  |", mWakeupBuckets.front().wakeupCount);
 
   // Print hostMessage count and histogram
-  debugDump.print(" %10" PRIu32 " |", mNumMessagesSentSinceBoot);
+  debugDump.print(" %10" PRIu32 " | ", mNumMessagesSentSinceBoot);
   for (size_t i = kMaxSizeWakeupBuckets - 1; i > 0; --i) {
     if (i >= mWakeupBuckets.size()) {
       debugDump.print(" --,");
@@ -348,7 +314,7 @@ void Nanoapp::logMessageHistoryEntry(DebugDumpWrapper &debugDump) const {
   debugDump.print(" %2" PRIu16 "  |", mWakeupBuckets.front().hostMessageCount);
 
   // Print eventProcessingTime count and histogram
-  debugDump.print(" %10" PRIu64 " |", mEventProcessTimeSinceBoot);
+  debugDump.print(" %10" PRIu64 " | ", mEventProcessTimeSinceBoot);
   for (size_t i = kMaxSizeWakeupBuckets - 1; i > 0; --i) {
     if (i >= mWakeupBuckets.size()) {
       debugDump.print("     --,");

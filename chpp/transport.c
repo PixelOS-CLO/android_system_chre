@@ -563,18 +563,6 @@ static void chppProcessResetAck(struct ChppTransportState *context) {
     chppDatagramProcessDoneCb(context, context->rxDatagram.payload);
     chppClearRxDatagram(context);
 
-    // In a very tight reset race, it is possible that this sequence number
-    // correction will not work. The lagging end will repeatedly resend the
-    // reset-ack until it is acked, which will never happen. In that case, we
-    // need to force a new reset. By doing so early on the receiving end we
-    // should avoid a second race.
-    if (context->unexpectedResetAckCount++ >=
-        CHPP_TRANSPORT_MAX_UNEXPECTED_RESET_ACK) {
-      chppMutexUnlock(&context->mutex);
-      chppReset(context, CHPP_TRANSPORT_ATTR_RESET,
-                CHPP_TRANSPORT_ERROR_MAX_RETRIES);
-      chppMutexLock(&context->mutex);
-    }
     return;
   }
 
@@ -1310,7 +1298,6 @@ static void chppResetTransportContext(struct ChppTransportState *context) {
 
   context->txStatus.sentSeq =
       UINT8_MAX;  // So that the seq # of the first TX packet is 0
-  context->unexpectedResetAckCount = 0;
   context->resetState = CHPP_RESET_STATE_RESETTING;
 }
 
