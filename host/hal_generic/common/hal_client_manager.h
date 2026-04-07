@@ -224,6 +224,29 @@ class HalClientManager {
                                            uint32_t transactionId,
                                            uint32_t currentFragmentId);
 
+  struct PendingTransaction {
+    PendingTransaction(HalClientId clientId, uint32_t transactionId,
+                       int64_t registeredTimeMs, int64_t nanoappId)
+        : clientId(clientId),
+          transactionId(transactionId),
+          registeredTimeMs(registeredTimeMs),
+          nanoappId(nanoappId) {}
+    HalClientId clientId;
+    uint32_t transactionId;
+    int64_t registeredTimeMs;
+    int64_t nanoappId;
+  };
+
+  /**
+   * Returns the pending load transaction info if one exists.
+   */
+  std::optional<PendingTransaction> getPendingLoadTransaction();
+
+  /**
+   * Returns the pending unload transaction info if one exists.
+   */
+  std::optional<PendingTransaction> getPendingUnloadTransaction();
+
   /**
    * Clears the pending load transaction.
    *
@@ -329,6 +352,11 @@ class HalClientManager {
       HostEndpointId mutatedEndpointId);
 
   /**
+   * Returns true if the process identified by the @p pid is the system server.
+   */
+  bool isSystemServer(pid_t pid);
+
+  /**
    * Handles the client death event.
    *
    * @param pid of the client that loses the binder connection to the HAL.
@@ -358,18 +386,6 @@ class HalClientManager {
   static constexpr HostEndpointId kMaxVendorEndpointId =
       (1 << kNumOfBitsForEndpointId) - 1;
 
-  struct PendingTransaction {
-    PendingTransaction(HalClientId clientId, uint32_t transactionId,
-                       int64_t registeredTimeMs) {
-      this->clientId = clientId;
-      this->transactionId = transactionId;
-      this->registeredTimeMs = registeredTimeMs;
-    }
-    HalClientId clientId;
-    uint32_t transactionId;
-    int64_t registeredTimeMs;
-  };
-
   /**
    * PendingLoadTransaction tracks ongoing load transactions.
    */
@@ -379,7 +395,7 @@ class HalClientManager {
         uint32_t currentFragmentId,
         std::unique_ptr<chre::FragmentedLoadTransaction> transaction)
         : PendingTransaction(clientId, transaction->getTransactionId(),
-                             registeredTimeMs) {
+                             registeredTimeMs, transaction->getNanoappId()) {
       this->currentFragmentId = currentFragmentId;
       this->transaction = std::move(transaction);
     }
@@ -403,9 +419,8 @@ class HalClientManager {
   struct PendingUnloadTransaction : public PendingTransaction {
     PendingUnloadTransaction(HalClientId clientId, uint32_t transactionId,
                              int64_t registeredTimeMs, int64_t appId)
-        : PendingTransaction(clientId, transactionId, registeredTimeMs),
-          nanoappId{appId} {}
-    int64_t nanoappId;
+        : PendingTransaction(clientId, transactionId, registeredTimeMs, appId) {
+    }
   };
 
   /**

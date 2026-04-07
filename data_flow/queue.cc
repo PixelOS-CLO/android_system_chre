@@ -148,7 +148,7 @@ pw::Result<BlockHeader *> allocateBlockRing(const AllocatorRegion &region,
  */
 void notify(IdOrNotifyFn &idOrNotifyFn, const RemoteNotifyFn &remoteNotifyFn) {
   if (remoteNotifyFn) {
-    remoteNotifyFn(pw::ConstByteSpan(idOrNotifyFn.remoteId));
+    remoteNotifyFn(idOrNotifyFn.remoteId);
   } else {
     idOrNotifyFn.localNotify.fn(idOrNotifyFn.localNotify.ctx);
   }
@@ -416,6 +416,7 @@ pw::Result<QueuePrivate *> ProducerBase::initQueue(
   if (!queue) {
     return pw::Status::ResourceExhausted();
   }
+  queue->queue.version = kVersion;
   queue->queue.sourceMetadataOffsetBytes = internal::kOffsetInvalid;
   if (elementSize) {
     if (capacity % elementSize != 0) {
@@ -483,25 +484,7 @@ pw::Status ProducerBase::initialize(bool variableData) {
 }
 
 ProducerBase::~ProducerBase() {
-  if (mState == State::kMovedFrom) {
-    return;
-  }
-  ScopedMemoryAccess memAccessScope(mMemAccess, mMemAccessCnt);
-  if (mState == State::kActive) {
-    stop();
-  }
-  // Deallocates all consumer descriptors. Consumers will have been notified in
-  // stop() that the producer is torn down. The user may wait for the consumers
-  // to signal that they have torn down before destroying the producer.
-  // Otherwise, this does any remaining cleanup. Note that the memory remains on
-  // the consumer side.
-  for (auto node = mQueue->consumerList.begin();
-       node != mQueue->consumerList.end();) {
-    eraseConsumerNode(node);
-  }
-  // Release element storage back to the region allocator.
-  deallocateBlockRing(mRegion, kBlockLayout, mCurrBlock);
-  mRegion.allocator->Deallocate(mQueue);
+  clear();
 }
 
 uint32_t ProducerBase::getQueueOffset() const {
@@ -728,13 +711,13 @@ void ProducerBase::updateWriteIndex(BlockHeader *tailBlock, uint32_t writeIndex,
 void ProducerBase::updateAvailable(uint32_t increment) {
   auto tail = ::chre::AtomicUint32Ref(mDesc->writeIndex).load() + mReserved;
   mAvailable = capacity() - mReserved;  // Reset available counts.
-  // Consumers that have been overwritten or would otherwise need to sync back
-  // to the producer position should not block writes to the queue, as well as
-  // consumers that are no longer in a valid state. Add them to the exclude
-  // mask. This effectively means all ProducerFlags states except kBlocking and
-  // kPendingInit.
+  // Only consider consumers that are in a valid state, including overwritten.
+  // Overwritten consumers should be considered because they may have synced or
+  // fast-forwarded their read positions and so need to be accounted in the
+  // available space calculation or to flag them overwritten again.
   auto excludeMask = ~(static_cast<uint16_t>(ProducerFlags::kBlocking) |
-                       static_cast<uint16_t>(ProducerFlags::kPendingInit));
+                       static_cast<uint16_t>(ProducerFlags::kPendingInit) |
+                       static_cast<uint16_t>(ProducerFlags::kOverwrite));
   forAllConsumers(
       excludeMask,
       [this](internal::ConsumerNode &node, uint32_t producerFlags,
@@ -743,13 +726,19 @@ void ProducerBase::updateAvailable(uint32_t increment) {
         auto diff = writeReadDiff(tail, readIndex);
         bool overwritable = node.policy.overwrite == OverwritePolicy::kAllowed;
         bool overwritten = false;
-        if (overwritable && diff + increment > capacity()) {
-          // If the consumer is behind by more than the current capacity or
-          // would be if the increment is applied, mark it overwritten.
-          // TODO(b/448384247): When the queue supports dynamic expansion,
-          // this needs to be more conservative.
-          setConsumerFlag(node, producerFlags, ProducerFlags::kOverwrite);
-          overwritten = true;
+        if (overwritable) {
+          if (diff + increment > capacity()) {
+            // If the consumer is behind by more than the current capacity or
+            // would be if the increment is applied, mark it overwritten.
+            setConsumerFlag(node, producerFlags, ProducerFlags::kOverwrite);
+            overwritten = true;
+          } else if (getProducerFlags(producerFlags) ==
+                     ProducerFlags::kOverwrite) {
+            // The consumer is no longer reading stale data. Clear the flag to
+            // hopefully avoid a DataLoss() error on next checkState() by this
+            // consumer.
+            setConsumerFlag(node, producerFlags, ProducerFlags::kNone);
+          }
         } else if (!overwritable && diff + increment >= capacity()) {
           // If the queue is at capacity or would be if the increment is
           // applied and the consumer cannot be overwritten, indicate that the
@@ -766,13 +755,17 @@ void ProducerBase::updateAvailable(uint32_t increment) {
 
 void ProducerBase::setConsumerFlag(ConsumerNode &node, uint32_t current,
                                    ProducerFlags flag, bool forceNotify) {
+  auto currentFlags = internal::getAndCheckProducerFlags(
+      current, ::chre::AtomicUint32Ref(node.desc->sinkFlags).load());
   uint32_t flagCounter = getFlagsCounter(current) + kFlagCountInc;
   ::chre::AtomicUint32Ref(node.desc->sourceFlags)
       .store(static_cast<uint32_t>(flag) | flagCounter);
+  // Notify the consumer if the flag is new, and if either forceNotify is set or
+  // the consumer policy allows notifications.
   // NOTE: If forceNotify, still check that the consumer has been initialized.
-  if ((forceNotify &&
-       getProducerFlags(current) != ProducerFlags::kPendingInit) ||
-      node.policy.notification != NotificationPolicy::kNever) {
+  if (currentFlags != flag &&
+      ((forceNotify && currentFlags != ProducerFlags::kPendingInit) ||
+       node.policy.notification != NotificationPolicy::kNever)) {
     notifyConsumer(*node.desc);
   }
 }
@@ -781,7 +774,7 @@ void ProducerBase::notifyConsumer(ConsumerDesc &desc) {
   notify(*reinterpret_cast<IdOrNotifyFn *>(&desc.id), mRemoteNotifyFn);
 }
 
-pw::Result<uint32_t> ProducerBase::addConsumer(pw::ConstByteSpan id,
+pw::Result<uint32_t> ProducerBase::addConsumer(const RemoteEndpointId &id,
                                                const AllocatorRegion &region,
                                                ConsumerPolicy policy) {
   PW_TRY(checkActive());
@@ -806,7 +799,7 @@ pw::Result<uint32_t> ProducerBase::addConsumer(pw::ConstByteSpan id,
   node->policy = policy;
   // Initialize the descriptor.
   std::memset(desc, 0, sizeof(internal::ConsumerDesc));
-  std::memcpy(&desc->id, id.data(), id.size());
+  std::memcpy(&desc->id, &id, sizeof(id));
   // Let the consumer know if they are overwritable.
   desc->isOverwritable = policy.overwrite == OverwritePolicy::kAllowed;
   ::chre::AtomicUint32Ref(desc->sinkFlags)
@@ -827,14 +820,13 @@ pw::Result<uint32_t> ProducerBase::addConsumer(pw::ConstByteSpan id,
   return toOffset(region.base, desc);
 }
 
-pw::Status ProducerBase::updateConsumerPolicy(pw::ConstByteSpan id,
+pw::Status ProducerBase::updateConsumerPolicy(const RemoteEndpointId &id,
                                               ConsumerPolicy policy) {
   ScopedMemoryAccess memAccessScope(mMemAccess, mMemAccessCnt);
   PW_TRY(checkPolicy(policy));
   for (auto node = mQueue->consumerList.begin();
        node != mQueue->consumerList.end();) {
-    if (id.size() == node->id.size() &&
-        !std::memcmp(node->id.data(), id.data(), id.size())) {
+    if (!std::memcmp(&node->id, &id, sizeof(id))) {
       node->policy = policy;
       node->desc->isOverwritable =
           policy.overwrite == OverwritePolicy::kAllowed;
@@ -847,7 +839,7 @@ pw::Status ProducerBase::updateConsumerPolicy(pw::ConstByteSpan id,
 }
 
 pw::Status ProducerBase::pruneConsumers(
-    const pw::Function<bool(pw::ConstByteSpan id)> &match) {
+    const pw::Function<bool(const RemoteEndpointId &id)> &match) {
   if (mState == State::kMovedFrom) {
     PW_LOG_ERROR("ProducerBase::pruneConsumers: Moved-from instance");
     return pw::Status::FailedPrecondition();
@@ -944,6 +936,28 @@ pw::Status ProducerBase::checkActive() const {
   return pw::OkStatus();
 }
 
+void ProducerBase::clear() {
+  if (mState == State::kMovedFrom) {
+    return;
+  }
+  ScopedMemoryAccess memAccessScope(mMemAccess, mMemAccessCnt);
+  if (mState == State::kActive) {
+    stop();
+  }
+  // Deallocates all consumer descriptors. Consumers will have been notified in
+  // stop() that the producer is torn down. The user may wait for the consumers
+  // to signal that they have torn down before destroying the producer.
+  // Otherwise, this does any remaining cleanup. Note that the memory remains on
+  // the consumer side.
+  for (auto node = mQueue->consumerList.begin();
+       node != mQueue->consumerList.end();) {
+    eraseConsumerNode(node);
+  }
+  // Release element storage back to the region allocator.
+  deallocateBlockRing(mRegion, kBlockLayout, mCurrBlock);
+  mRegion.allocator->Deallocate(mQueue);
+}
+
 pw::Result<std::pair<Queue *, ConsumerDesc *>> ConsumerBase::checkArgs(
     const Region &region, const Region *descRegion, uint32_t queueOffset,
     uint32_t descOffset) {
@@ -993,6 +1007,7 @@ pw::Status ConsumerBase::initialize(
                ? pw::Status::Aborted()
                : pw::Status::FailedPrecondition();
   }
+  mDesc->version = kVersion;
   std::memcpy(&mDesc->id, &idOrNotifyFn, sizeof(IdOrNotifyFn));
   // mBlockListEpoch must be set before capacity() is called when setting a
   // default mOverwriteResetOffset. This is subsequently used if the consumer
@@ -1043,7 +1058,7 @@ pw::Status ConsumerBase::checkStateInternal() {
       PW_LOG_ERROR("ConsumerBase::checkState: producer gone or disconnected");
       return pw::Status::Aborted();
     case ProducerFlags::kOverwrite: {
-      PW_LOG_INFO("ConsumerBase::checkState: read position overwritten");
+      PW_LOG_DEBUG("ConsumerBase::checkState: read position overwritten");
       PW_TRY(handleOverwrite());
       clearFlags();
       return pw::Status::DataLoss();
@@ -1108,7 +1123,7 @@ pw::Status ConsumerBase::releaseNoNotify(size_t count) {
     mPeeked -= count;
   }
   advanceReadIndex(count, /*buf=*/std::nullopt);
-  return pw::OkStatus();
+  return checkStateInternal();
 }
 
 pw::Status ConsumerBase::popNoNotify(pw::ByteSpan data) {
@@ -1118,7 +1133,7 @@ pw::Status ConsumerBase::popNoNotify(pw::ByteSpan data) {
   }
   PW_TRY(checkAvailable(data.size()));
   advanceReadIndex(data.size(), data);
-  return pw::OkStatus();
+  return checkStateInternal();
 }
 
 pw::Status ConsumerBase::resync(size_t offset) {
