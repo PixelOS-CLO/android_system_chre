@@ -247,6 +247,12 @@ pw::Status HostHub::ackSession(uint16_t id, bool hostAcked) {
   return pw::OkStatus();
 }
 
+pw::Result<EndpointId> HostHub::getSessionEmbeddedEndpoint(uint16_t sessionId) {
+  std::lock_guard lock(mManager.mLock);
+  PW_TRY_ASSIGN(auto *session, getSessionLocked(sessionId));
+  return session->mEmbeddedEndpoint;
+}
+
 pw::Status HostHub::handleMessage(uint16_t sessionId, const Message &message) {
   std::lock_guard lock(mManager.mLock);
   PW_TRY(checkValidLocked());
