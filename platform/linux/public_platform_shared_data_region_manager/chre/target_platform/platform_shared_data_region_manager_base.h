@@ -16,7 +16,10 @@
 
 #pragma once
 
-#include "chre/util/pigweed/default_pw_allocator.h"
+#include <cstddef>
+#include <cstdint>
+
+#include "data_flow/queue_defs.h"
 
 namespace chre {
 
@@ -36,9 +39,28 @@ class PlatformSharedDataRegionManagerBase {
     mNumCallsToDeallocateRegion = 0;
   }
 
+  /**
+   * Sets the allocator region for a region with the given ID. Visible for
+   * testing.
+   *
+   * @param allocatorRegion The allocator region to set for the region.
+   */
+  void setAllocatorRegion(
+      const ::android::contexthub::data_flow::AllocatorRegion &allocatorRegion);
+
+  /**
+   * Clears the allocator region for a region with the given ID. Visible for
+   * testing.
+   *
+   * @param regionId The ID of the region to clear the allocator region for.
+   */
+  void clearAllocatorRegion();
+
  protected:
-  DefaultPwAllocator mAllocator;
+  //! The number of calls to deallocateRegion.
   size_t mNumCallsToDeallocateRegion = 0;
+
+  //! The cookie to return for all async allocation requests.
   uintptr_t mCookie = 0xDEADBEEF;
 };
 
