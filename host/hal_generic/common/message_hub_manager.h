@@ -245,6 +245,14 @@ class MessageHubManager {
       return kInfo.hubId;
     }
 
+    /**
+     * Gets the embedded endpoint ID of the input session..
+     *
+     * @param sessionId The session ID to query.
+     * @return The embedded endpoint ID of this session.
+     */
+    pw::Result<EndpointId> getSessionEmbeddedEndpoint(uint16_t sessionId);
+
    private:
     friend class MessageHubManager;
     friend class MessageHubManagerTest;

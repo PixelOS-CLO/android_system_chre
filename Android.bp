@@ -63,6 +63,16 @@ filegroup {
     srcs: ["host/hal_generic/common/bluetooth_socket_fbs_hal.cc"],
 }
 
+// Shared libraries in HAL common implementation
+filegroup {
+    name: "chre_hal_shared_srcs",
+    srcs: [
+        "host/hal_generic/common/data_flow_epoll_waiter.cc",
+        "host/hal_generic/common/data_flow_manager.cc",
+        "host/hal_generic/common/message_hub_manager.cc",
+    ],
+}
+
 filegroup {
     name: "contexthub_hal_common_srcs",
     srcs: [
